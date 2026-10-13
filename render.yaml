@@ -7,12 +7,14 @@ services:
     envVars:
       - key: SECRET_KEY
         generateValue: true
-      - key: DATABASE_URL
-        value: sqlite:///lostfound.db
+        sync: false
       - key: RENDER
         value: true
       - key: PYTHON_VERSION
-        value: 3.10.0
+        value: 3.13.3
+      # DATABASE_URL is intentionally omitted here.
+      # Attach a Render PostgreSQL database to this service in the Render
+      # dashboard — Render will inject DATABASE_URL automatically.
       # S3 — set these manually in the Render dashboard after creating the bucket
       - key: AWS_ACCESS_KEY_ID
         value: ""

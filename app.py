@@ -1,7 +1,10 @@
 import os
+import logging
 from flask import Flask, render_template
 from config import Config
 from extensions import db, login_manager
+
+logger = logging.getLogger(__name__)
 
 
 def create_app():
@@ -41,7 +44,17 @@ def create_app():
         return render_template('errors/403.html'), 403
 
     with app.app_context():
-        db.create_all()
+        db_url = app.config['SQLALCHEMY_DATABASE_URI']
+        # Log which backend is active (mask credentials)
+        if 'postgresql' in db_url or 'postgres' in db_url:
+            logger.info('Database backend: PostgreSQL')
+        else:
+            logger.info('Database backend: SQLite (local dev)')
+        try:
+            db.create_all()
+        except Exception as exc:  # pragma: no cover
+            logger.error('db.create_all() failed: %s', exc)
+            raise
 
     return app
 
