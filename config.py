@@ -19,9 +19,36 @@ def _upload_folder():
     return path
 
 
+def _database_uri():
+    """
+    Return the correct SQLAlchemy database URI.
+
+    Render / Heroku supply  postgres://...  but SQLAlchemy 1.4+ dropped that
+    scheme alias.  We normalise it to  postgresql://  first.
+
+    SQLAlchemy 2.x with a bare  postgresql://  URL probes for psycopg3
+    (import name 'psycopg') before falling back to psycopg2.  On Render that
+    probe raises  ModuleNotFoundError: No module named 'psycopg'  and the
+    worker crashes before it ever tries psycopg2-binary.
+
+    Using the explicit dialect  postgresql+psycopg2://  bypasses the probe
+    entirely and goes straight to psycopg2, which is what we ship.
+
+    Falls back to SQLite for local development when DATABASE_URL is not set.
+    """
+    url = os.environ.get('DATABASE_URL', '')
+    # Step 1 — fix legacy scheme
+    if url.startswith('postgres://'):
+        url = 'postgresql://' + url[len('postgres://'):]
+    # Step 2 — pin the dialect to psycopg2 so SQLAlchemy 2.x never probes psycopg3
+    if url.startswith('postgresql://') and '+' not in url.split('://')[0]:
+        url = 'postgresql+psycopg2://' + url[len('postgresql://'):]
+    return url or 'sqlite:///lostfound.db'
+
+
 class Config:
     SECRET_KEY = os.environ.get('SECRET_KEY', 'dev-secret-change-in-production')
-    SQLALCHEMY_DATABASE_URI = os.environ.get('DATABASE_URL', 'sqlite:///lostfound.db')
+    SQLALCHEMY_DATABASE_URI = _database_uri()
     SQLALCHEMY_TRACK_MODIFICATIONS = False
     MAX_CONTENT_LENGTH = 5 * 1024 * 1024  # 5 MB hard limit enforced by Flask
     UPLOAD_FOLDER = _upload_folder()
