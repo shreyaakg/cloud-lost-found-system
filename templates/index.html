@@ -1,0 +1,37 @@
+{% extends 'base.html' %}
+{% block title %}Home - LostFound Cloud{% endblock %}
+{% block content %}
+<section class="hero">
+  <div class="hero-content">
+    <h1>Lost Something? Found Something?</h1>
+    <p>A cloud-based platform to report, search and recover lost items.</p>
+    <div class="hero-actions">
+      <a href="{{ url_for('auth.register') }}" class="btn btn-primary">Get Started</a>
+      <a href="{{ url_for('items.lost_items') }}" class="btn btn-outline">Browse Lost Items</a>
+    </div>
+  </div>
+</section>
+
+<section class="features">
+  <div class="feature-card">
+    <span class="feature-icon">📋</span>
+    <h3>Report Items</h3>
+    <p>Quickly report lost or found items with photos and details.</p>
+  </div>
+  <div class="feature-card">
+    <span class="feature-icon">🔎</span>
+    <h3>Smart Matching</h3>
+    <p>Our algorithm automatically matches lost items with found items.</p>
+  </div>
+  <div class="feature-card">
+    <span class="feature-icon">🔒</span>
+    <h3>File Integrity</h3>
+    <p>SHA-256 hashing ensures uploaded images are never tampered with.</p>
+  </div>
+  <div class="feature-card">
+    <span class="feature-icon">☁️</span>
+    <h3>Cloud Ready</h3>
+    <p>Built for deployment on AWS EC2 and cloud platforms.</p>
+  </div>
+</section>
+{% endblock %}

@@ -1,0 +1,62 @@
+{% extends 'base.html' %}
+{% block title %}Edit Item - LostFound Cloud{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h2>Edit Item</h2>
+</div>
+
+<div class="form-container">
+  <form method="POST" enctype="multipart/form-data">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Item Name *</label>
+        <input type="text" name="item_name" value="{{ item.item_name }}" required>
+      </div>
+      <div class="form-group">
+        <label>Category *</label>
+        <select name="category" required>
+          {% for cat in categories %}
+            <option value="{{ cat }}" {% if item.category == cat %}selected{% endif %}>{{ cat }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Description *</label>
+      <textarea name="description" rows="4" required>{{ item.description }}</textarea>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Location *</label>
+        <input type="text" name="location" value="{{ item.location }}" required>
+      </div>
+      <div class="form-group">
+        <label>Date *</label>
+        <input type="date" name="date_lost_found" value="{{ item.date_lost_found.strftime('%Y-%m-%d') }}" required>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Contact *</label>
+      <input type="text" name="contact" value="{{ item.contact }}" required>
+    </div>
+
+    <div class="form-group">
+      {% if image_url %}
+        <label>Current Image</label>
+        <img src="{{ image_url }}" alt="Current" class="edit-preview-image">
+        {% if item.s3_object_key %}<p><small>☁️ Stored in AWS S3</small></p>{% endif %}
+      {% endif %}
+      <label>Replace Image (optional)</label>
+      <input type="file" name="image" accept=".jpg,.jpeg,.png,.webp">
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Save Changes</button>
+      <a href="{{ url_for('items.item_detail', item_id=item.id) }}" class="btn btn-outline">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

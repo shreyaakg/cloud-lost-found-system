@@ -1,0 +1,59 @@
+{% extends 'base.html' %}
+{% block title %}Report {{ item_type|title }} Item - LostFound Cloud{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h2>Report a {{ item_type|title }} Item</h2>
+</div>
+
+<div class="form-container">
+  <form method="POST" enctype="multipart/form-data">
+    <div class="form-row">
+      <div class="form-group">
+        <label>Item Name *</label>
+        <input type="text" name="item_name" value="{{ item_name or '' }}" required placeholder="e.g. Black Wallet">
+      </div>
+      <div class="form-group">
+        <label>Category *</label>
+        <select name="category" required>
+          <option value="">Select category</option>
+          {% for cat in categories %}
+            <option value="{{ cat }}" {% if category == cat %}selected{% endif %}>{{ cat }}</option>
+          {% endfor %}
+        </select>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Description *</label>
+      <textarea name="description" rows="4" required placeholder="Describe the item in detail...">{{ description or '' }}</textarea>
+    </div>
+
+    <div class="form-row">
+      <div class="form-group">
+        <label>Location *</label>
+        <input type="text" name="location" value="{{ location or '' }}" required
+               placeholder="Where was it {{ 'lost' if item_type == 'LOST' else 'found' }}?">
+      </div>
+      <div class="form-group">
+        <label>Date {{ 'Lost' if item_type == 'LOST' else 'Found' }} *</label>
+        <input type="date" name="date_lost_found" value="{{ date_lost_found or '' }}" required>
+      </div>
+    </div>
+
+    <div class="form-group">
+      <label>Contact Information *</label>
+      <input type="text" name="contact" value="{{ contact or '' }}" required placeholder="Email or phone number">
+    </div>
+
+    <div class="form-group">
+      <label>Upload Image (JPG, PNG, WEBP — max 5MB)</label>
+      <input type="file" name="image" accept=".jpg,.jpeg,.png,.webp">
+    </div>
+
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Submit Report</button>
+      <a href="{{ url_for('main.dashboard') }}" class="btn btn-outline">Cancel</a>
+    </div>
+  </form>
+</div>
+{% endblock %}

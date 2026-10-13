@@ -1,0 +1,86 @@
+{% extends 'base.html' %}
+{% block title %}Integrity Verification - LostFound Cloud{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h2>File Integrity Verification</h2>
+  <p>SHA-256 hash comparison for: <strong>{{ item.item_name }}</strong></p>
+</div>
+
+<div class="verify-container">
+
+  {% if result == 'VERIFIED' %}
+    <div class="verify-result verify-ok">
+      <span class="verify-icon">✅</span>
+      <h3>INTEGRITY VERIFIED</h3>
+      <p>The file has not been modified since it was uploaded.</p>
+    </div>
+
+  {% elif result == 'FAILED' %}
+    <div class="verify-result verify-fail">
+      <span class="verify-icon">❌</span>
+      <h3>INTEGRITY CHECK FAILED</h3>
+      <p>The file has been modified or replaced since upload. Hashes do not match.</p>
+    </div>
+
+  {% elif result == 'NO_FILE' %}
+    <div class="verify-result verify-warn">
+      <span class="verify-icon">⚠️</span>
+      <h3>FILE NOT FOUND</h3>
+      <p>The image file could not be located on the server.</p>
+    </div>
+
+  {% elif result == 'S3_ERROR' %}
+    <div class="verify-result verify-fail">
+      <span class="verify-icon">❌</span>
+      <h3>S3 RETRIEVAL FAILED</h3>
+      <p>Could not download the file from AWS S3 to verify its integrity.</p>
+    </div>
+
+  {% elif result == 'S3_NOT_CONFIGURED' %}
+    <div class="verify-result verify-warn">
+      <span class="verify-icon">⚠️</span>
+      <h3>S3 NOT CONFIGURED</h3>
+      <p>This file is stored in S3 but AWS credentials are not configured in this environment.</p>
+    </div>
+
+  {% else %}
+    <div class="verify-result verify-warn">
+      <span class="verify-icon">ℹ️</span>
+      <h3>NO IMAGE</h3>
+      <p>This item has no uploaded image to verify.</p>
+    </div>
+  {% endif %}
+
+  {% if storage_info %}
+    <div class="hash-display">
+      <div class="hash-row">
+        <span class="hash-label">Storage Location:</span>
+        <code class="hash-code">{{ storage_info }}</code>
+      </div>
+    </div>
+  {% endif %}
+
+  {% if stored_hash %}
+    <div class="hash-display">
+      <div class="hash-row">
+        <span class="hash-label">Stored Hash (at upload time):</span>
+        <code class="hash-code">{{ stored_hash }}</code>
+      </div>
+      {% if current_hash %}
+        <div class="hash-row">
+          <span class="hash-label">Current Hash (recalculated now):</span>
+          <code class="hash-code {% if current_hash != stored_hash %}hash-mismatch{% endif %}">{{ current_hash }}</code>
+        </div>
+        <div class="hash-row">
+          <span class="hash-label">Match:</span>
+          <strong>{% if current_hash == stored_hash %}✅ Hashes are identical{% else %}❌ Hashes differ{% endif %}</strong>
+        </div>
+      {% endif %}
+    </div>
+  {% endif %}
+
+  <div class="verify-actions">
+    <a href="{{ url_for('items.item_detail', item_id=item.id) }}" class="btn btn-outline">Back to Item</a>
+  </div>
+</div>
+{% endblock %}

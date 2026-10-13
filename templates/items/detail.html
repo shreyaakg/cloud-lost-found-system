@@ -1,0 +1,93 @@
+{% extends 'base.html' %}
+{% block title %}{{ item.item_name }} - LostFound Cloud{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h2>{{ item.item_name }}</h2>
+  <span class="badge badge-{{ item.status.lower() }} badge-lg">{{ item.status }}</span>
+  <span class="badge badge-type-{{ item.item_type.lower() }}">{{ item.item_type }}</span>
+</div>
+
+<div class="detail-layout">
+  <div class="detail-image-col">
+    {% if image_url %}
+      <img src="{{ image_url }}" alt="{{ item.item_name }}" class="detail-image">
+      {% if item.s3_object_key %}
+        <p class="storage-badge">☁️ Stored in AWS S3</p>
+      {% else %}
+        <p class="storage-badge">💾 Stored locally</p>
+      {% endif %}
+      <a href="{{ url_for('items.verify_integrity', item_id=item.id) }}" class="btn btn-outline btn-full mt-1">
+        🔒 Verify File Integrity (SHA-256)
+      </a>
+    {% elif item.s3_object_key %}
+      <div class="detail-image-placeholder">
+        ☁️ Image in S3<br><small>Presigned URL unavailable</small>
+      </div>
+      <a href="{{ url_for('items.verify_integrity', item_id=item.id) }}" class="btn btn-outline btn-full mt-1">
+        🔒 Verify File Integrity (SHA-256)
+      </a>
+    {% else %}
+      <div class="detail-image-placeholder">No Image Uploaded</div>
+    {% endif %}
+  </div>
+
+  <div class="detail-info-col">
+    <table class="detail-table">
+      <tr><th>Category</th><td>{{ item.category }}</td></tr>
+      <tr><th>Location</th><td>{{ item.location }}</td></tr>
+      <tr><th>Date</th><td>{{ item.date_lost_found.strftime('%d %B %Y') }}</td></tr>
+      <tr><th>Contact</th><td>{{ item.contact }}</td></tr>
+      <tr><th>Reported by</th><td>{{ item.owner.name }}</td></tr>
+      <tr><th>Reported on</th><td>{{ item.created_at.strftime('%d %b %Y %H:%M') }}</td></tr>
+      {% if item.s3_object_key %}
+      <tr><th>Storage</th><td>AWS S3</td></tr>
+      <tr><th>S3 Key</th><td class="hash-value">{{ item.s3_object_key }}</td></tr>
+      {% endif %}
+      {% if item.sha256_hash %}
+      <tr><th>SHA-256</th><td class="hash-value">{{ item.sha256_hash }}</td></tr>
+      {% endif %}
+    </table>
+
+    <div class="detail-description">
+      <h4>Description</h4>
+      <p>{{ item.description }}</p>
+    </div>
+
+    {% if current_user.is_authenticated and current_user.id == item.user_id %}
+      <div class="owner-actions">
+        <a href="{{ url_for('items.edit_item', item_id=item.id) }}" class="btn btn-outline">Edit</a>
+        {% if item.status != 'RECOVERED' %}
+          <form method="POST" action="{{ url_for('items.mark_recovered', item_id=item.id) }}" style="display:inline">
+            <button type="submit" class="btn btn-success"
+                    onclick="return confirm('Mark this item as recovered?')">Mark Recovered</button>
+          </form>
+        {% endif %}
+        <form method="POST" action="{{ url_for('items.delete_item', item_id=item.id) }}" style="display:inline">
+          <button type="submit" class="btn btn-danger"
+                  onclick="return confirm('Delete this item? This cannot be undone.')">Delete</button>
+        </form>
+      </div>
+    {% endif %}
+  </div>
+</div>
+
+{% if matches %}
+  <div class="matches-section">
+    <h3>Possible Matches ({{ matches|length }})</h3>
+    <div class="matches-list">
+      {% for match in matches %}
+        {% set other = match.found_item if item.item_type == 'LOST' else match.lost_item %}
+        <div class="match-card">
+          <div class="match-score-badge">{{ match.match_score }}%</div>
+          <div class="match-info">
+            <h4><a href="{{ url_for('items.item_detail', item_id=other.id) }}">{{ other.item_name }}</a></h4>
+            <p>{{ other.category }} &mdash; {{ other.location }}</p>
+            <p class="match-reasons">{{ match.matching_reason }}</p>
+          </div>
+          <span class="badge badge-{{ match.status.lower() }}">{{ match.status }}</span>
+        </div>
+      {% endfor %}
+    </div>
+  </div>
+{% endif %}
+{% endblock %}

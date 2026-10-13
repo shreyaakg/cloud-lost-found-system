@@ -1,0 +1,58 @@
+{% extends 'base.html' %}
+{% block title %}Dashboard - LostFound Cloud{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h2>Welcome, {{ current_user.name }}</h2>
+  <p>Here's an overview of all reported items.</p>
+</div>
+
+<div class="stats-grid">
+  <div class="stat-card stat-lost">
+    <span class="stat-number">{{ total_lost }}</span>
+    <span class="stat-label">Lost Items</span>
+  </div>
+  <div class="stat-card stat-found">
+    <span class="stat-number">{{ total_found }}</span>
+    <span class="stat-label">Found Items</span>
+  </div>
+  <div class="stat-card stat-active">
+    <span class="stat-number">{{ active }}</span>
+    <span class="stat-label">Active Reports</span>
+  </div>
+  <div class="stat-card stat-matched">
+    <span class="stat-number">{{ matched }}</span>
+    <span class="stat-label">Matched</span>
+  </div>
+  <div class="stat-card stat-recovered">
+    <span class="stat-number">{{ recovered }}</span>
+    <span class="stat-label">Recovered</span>
+  </div>
+</div>
+
+<div class="action-grid">
+  <a href="{{ url_for('items.report_lost') }}" class="action-card action-lost">
+    <span>📦</span>
+    <strong>Report Lost Item</strong>
+  </a>
+  <a href="{{ url_for('items.report_found') }}" class="action-card action-found">
+    <span>✅</span>
+    <strong>Report Found Item</strong>
+  </a>
+  <a href="{{ url_for('items.lost_items') }}" class="action-card">
+    <span>🔍</span>
+    <strong>Search Lost Items</strong>
+  </a>
+  <a href="{{ url_for('items.found_items') }}" class="action-card">
+    <span>📂</span>
+    <strong>Browse Found Items</strong>
+  </a>
+  <a href="{{ url_for('items.matches') }}" class="action-card">
+    <span>🔗</span>
+    <strong>View Matches</strong>
+  </a>
+  <a href="{{ url_for('items.my_reports') }}" class="action-card">
+    <span>👤</span>
+    <strong>My Reports</strong>
+  </a>
+</div>
+{% endblock %}

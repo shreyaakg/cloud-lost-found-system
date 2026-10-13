@@ -1,0 +1,33 @@
+{% extends 'base.html' %}
+{% block title %}Register - LostFound Cloud{% endblock %}
+{% block content %}
+<div class="auth-container">
+  <div class="auth-card">
+    <h2>Create Account</h2>
+    <form method="POST" action="{{ url_for('auth.register') }}">
+      <div class="form-group">
+        <label>Full Name</label>
+        <input type="text" name="name" value="{{ name or '' }}" required placeholder="Your full name">
+      </div>
+      <div class="form-group">
+        <label>Email Address</label>
+        <input type="email" name="email" value="{{ email or '' }}" required placeholder="you@example.com">
+      </div>
+      <div class="form-group">
+        <label>Phone Number</label>
+        <input type="tel" name="phone" value="{{ phone or '' }}" required placeholder="+1234567890">
+      </div>
+      <div class="form-group">
+        <label>Password</label>
+        <input type="password" name="password" required placeholder="Minimum 6 characters">
+      </div>
+      <div class="form-group">
+        <label>Confirm Password</label>
+        <input type="password" name="confirm_password" required placeholder="Repeat password">
+      </div>
+      <button type="submit" class="btn btn-primary btn-full">Register</button>
+    </form>
+    <p class="auth-link">Already have an account? <a href="{{ url_for('auth.login') }}">Login</a></p>
+  </div>
+</div>
+{% endblock %}

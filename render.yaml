@@ -1,0 +1,24 @@
+services:
+  - type: web
+    name: lostfound-cloud
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: DATABASE_URL
+        value: sqlite:///lostfound.db
+      - key: RENDER
+        value: true
+      - key: PYTHON_VERSION
+        value: 3.10.0
+      # S3 — set these manually in the Render dashboard after creating the bucket
+      - key: AWS_ACCESS_KEY_ID
+        value: ""
+      - key: AWS_SECRET_ACCESS_KEY
+        value: ""
+      - key: AWS_REGION
+        value: ap-southeast-1
+      - key: S3_BUCKET_NAME
+        value: ""

@@ -1,0 +1,40 @@
+# Environment secrets - NEVER commit
+.env
+
+# Python
+venv/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+dist/
+build/
+
+# Database - ephemeral, auto-created on startup
+instance/
+*.db
+*.sqlite
+*.sqlite3
+
+# Uploaded files - ephemeral on PaaS
+static/uploads/*
+!static/uploads/.gitkeep
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+app_output.log
+
+# Render build cache
+.render/

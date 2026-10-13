@@ -1,0 +1,27 @@
+# Systemd service file for LostFound Cloud (Gunicorn)
+# Deploy path on server: /etc/systemd/system/lostfound.service
+#
+# This file is a reference — copy it to the server manually.
+# Do NOT commit .env or secrets to GitHub.
+
+[Unit]
+Description=LostFound Cloud — Gunicorn WSGI Server
+After=network.target
+
+[Service]
+User=ubuntu
+Group=www-data
+WorkingDirectory=/home/ubuntu/lostfound-cloud
+EnvironmentFile=/home/ubuntu/lostfound-cloud/.env
+ExecStart=/home/ubuntu/lostfound-cloud/venv/bin/gunicorn \
+          --config /home/ubuntu/lostfound-cloud/gunicorn.conf.py \
+          app:app
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

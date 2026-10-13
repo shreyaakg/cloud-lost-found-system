@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+{% block title %}My Reports - LostFound Cloud{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h2>My Reports</h2>
+  <div>
+    <a href="{{ url_for('items.report_lost') }}" class="btn btn-primary">+ Report Lost</a>
+    <a href="{{ url_for('items.report_found') }}" class="btn btn-outline">+ Report Found</a>
+  </div>
+</div>
+
+{% if items %}
+  <table class="data-table">
+    <thead>
+      <tr>
+        <th>Item</th>
+        <th>Type</th>
+        <th>Category</th>
+        <th>Location</th>
+        <th>Date</th>
+        <th>Status</th>
+        <th>Actions</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in items %}
+        <tr>
+          <td><a href="{{ url_for('items.item_detail', item_id=item.id) }}">{{ item.item_name }}</a></td>
+          <td><span class="badge badge-type-{{ item.item_type.lower() }}">{{ item.item_type }}</span></td>
+          <td>{{ item.category }}</td>
+          <td>{{ item.location }}</td>
+          <td>{{ item.date_lost_found.strftime('%d %b %Y') }}</td>
+          <td><span class="badge badge-{{ item.status.lower() }}">{{ item.status }}</span></td>
+          <td>
+            <a href="{{ url_for('items.edit_item', item_id=item.id) }}" class="btn btn-sm btn-outline">Edit</a>
+            <form method="POST" action="{{ url_for('items.delete_item', item_id=item.id) }}" style="display:inline">
+              <button type="submit" class="btn btn-sm btn-danger"
+                      onclick="return confirm('Delete this item?')">Delete</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+{% else %}
+  <div class="empty-state">
+    <p>You haven't reported any items yet.</p>
+    <a href="{{ url_for('items.report_lost') }}" class="btn btn-primary">Report Lost Item</a>
+  </div>
+{% endif %}
+{% endblock %}

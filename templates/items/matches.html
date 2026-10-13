@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+{% block title %}Matches - LostFound Cloud{% endblock %}
+{% block content %}
+<div class="page-header">
+  <h2>Item Matches</h2>
+  <p>Items matched by name, category, location and description similarity.</p>
+</div>
+
+{% if matches %}
+  <div class="matches-list">
+    {% for match in matches %}
+      <div class="match-card-full">
+        <div class="match-pair">
+          <div class="match-item match-lost">
+            <span class="badge badge-type-lost">LOST</span>
+            <h4><a href="{{ url_for('items.item_detail', item_id=match.lost_item.id) }}">{{ match.lost_item.item_name }}</a></h4>
+            <p>{{ match.lost_item.category }} &mdash; {{ match.lost_item.location }}</p>
+            <p>{{ match.lost_item.date_lost_found.strftime('%d %b %Y') }}</p>
+          </div>
+
+          <div class="match-score-center">
+            <div class="score-circle {% if match.match_score >= 75 %}score-high{% elif match.match_score >= 50 %}score-medium{% endif %}">
+              {{ match.match_score }}%
+            </div>
+            <p>Match Score</p>
+          </div>
+
+          <div class="match-item match-found">
+            <span class="badge badge-type-found">FOUND</span>
+            <h4><a href="{{ url_for('items.item_detail', item_id=match.found_item.id) }}">{{ match.found_item.item_name }}</a></h4>
+            <p>{{ match.found_item.category }} &mdash; {{ match.found_item.location }}</p>
+            <p>{{ match.found_item.date_lost_found.strftime('%d %b %Y') }}</p>
+          </div>
+        </div>
+
+        <div class="match-reasons">
+          <strong>Matching reasons:</strong> {{ match.matching_reason }}
+        </div>
+        <div class="match-status">
+          Status: <span class="badge badge-{{ match.status.lower() }}">{{ match.status }}</span>
+        </div>
+      </div>
+    {% endfor %}
+  </div>
+{% else %}
+  <div class="empty-state">
+    <p>No matches found yet. Report more items to see automatic matches.</p>
+    <a href="{{ url_for('items.report_lost') }}" class="btn btn-primary">Report Lost Item</a>
+  </div>
+{% endif %}
+{% endblock %}
