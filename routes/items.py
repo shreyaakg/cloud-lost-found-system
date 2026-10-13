@@ -233,7 +233,7 @@ def found_items():
 
 @items_bp.route('/item/<int:item_id>')
 def item_detail(item_id):
-    item = Item.query.get_or_404(item_id)
+    item = db.get_or_404(Item, item_id)
 
     # Build image URL — presigned if S3, static path if local
     image_url = _get_image_url(item)
@@ -269,7 +269,7 @@ def _get_image_url(item):
 @items_bp.route('/item/<int:item_id>/edit', methods=['GET', 'POST'])
 @login_required
 def edit_item(item_id):
-    item = Item.query.get_or_404(item_id)
+    item = db.get_or_404(Item, item_id)
     if item.user_id != current_user.id:
         abort(403)
 
@@ -314,7 +314,7 @@ def edit_item(item_id):
 @items_bp.route('/item/<int:item_id>/delete', methods=['POST'])
 @login_required
 def delete_item(item_id):
-    item = Item.query.get_or_404(item_id)
+    item = db.get_or_404(Item, item_id)
     if item.user_id != current_user.id:
         abort(403)
 
@@ -337,7 +337,7 @@ def delete_item(item_id):
 @items_bp.route('/item/<int:item_id>/recover', methods=['POST'])
 @login_required
 def mark_recovered(item_id):
-    item = Item.query.get_or_404(item_id)
+    item = db.get_or_404(Item, item_id)
     if item.user_id != current_user.id:
         abort(403)
     item.status = 'RECOVERED'
@@ -371,7 +371,7 @@ def matches():
 @items_bp.route('/verify/<int:item_id>')
 @login_required
 def verify_integrity(item_id):
-    item = Item.query.get_or_404(item_id)
+    item = db.get_or_404(Item, item_id)
     stored_hash  = item.sha256_hash
     current_hash = None
     result       = None

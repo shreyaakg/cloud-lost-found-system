@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from extensions import db
 
 
@@ -18,7 +18,7 @@ class Item(db.Model):
     s3_object_key = db.Column(db.String(300))
     sha256_hash = db.Column(db.String(64))
     status = db.Column(db.String(20), default='ACTIVE')    # ACTIVE, MATCHED, RECOVERED
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     lost_matches = db.relationship('Match', foreign_keys='Match.lost_item_id',
                                    backref='lost_item', lazy=True)
@@ -38,7 +38,7 @@ class Match(db.Model):
     match_score = db.Column(db.Float, nullable=False)
     matching_reason = db.Column(db.Text)
     status = db.Column(db.String(20), default='PENDING')   # PENDING, CONFIRMED, REJECTED
-    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+    created_at = db.Column(db.DateTime, default=lambda: datetime.now(timezone.utc))
 
     def __repr__(self):
         return f'<Match lost={self.lost_item_id} found={self.found_item_id} score={self.match_score}>'
