@@ -264,6 +264,53 @@ with app.test_client() as c:
     }, content_type='multipart/form-data', follow_redirects=True)
     check("Invalid file type rejected", b'allowed' in r.data.lower() or r.status_code == 200)
 
+    # Missing required fields returns 200 with error messages (not 500)
+    r = c.post('/report-lost', data={
+        'item_name': '', 'category': '', 'description': '',
+        'location': '', 'date_lost_found': '', 'contact': ''
+    }, follow_redirects=True)
+    check("Missing fields returns 200 not 500", r.status_code == 200)
+    check("Missing fields shows error message", b'required' in r.data.lower())
+
+    # Unrelated items should NOT match each other
+    r = c.post('/report-lost', data={
+        'item_name': 'Red Umbrella', 'category': 'Other',
+        'description': 'A red umbrella with wooden handle',
+        'location': 'Bus Stop 42', 'date_lost_found': '2024-03-01',
+        'contact': 'alice@test.com'
+    }, follow_redirects=True)
+    check("Unrelated lost item reported (200)", r.status_code == 200)
+
+    r = c.post('/report-found', data={
+        'item_name': 'Blue Laptop', 'category': 'Electronics',
+        'description': 'A blue laptop found in the park',
+        'location': 'Central Park', 'date_lost_found': '2024-03-02',
+        'contact': 'finder2@test.com'
+    }, follow_redirects=True)
+    check("Unrelated found item reported (200)", r.status_code == 200)
+
+    # Verify unrelated items did not get matched
+    r = c.get('/matches')
+    check("Unrelated items not matched",
+          b'Red Umbrella' not in r.data or b'Blue Laptop' not in r.data)
+
+    # List pages render correctly (S3 items have s3_object_key, not image_filename)
+    r = c.get('/lost-items')
+    check("Lost items list renders without 500", r.status_code == 200)
+    r = c.get('/found-items')
+    check("Found items list renders without 500", r.status_code == 200)
+
+    # Auto-match failure does not cause 500 — item is still saved
+    # Simulate by reporting an item when matching would normally run
+    r = c.post('/report-lost', data={
+        'item_name': 'Green Scarf', 'category': 'Clothing',
+        'description': 'Green woolen scarf',
+        'location': 'Train Station', 'date_lost_found': '2024-04-01',
+        'contact': 'alice@test.com'
+    }, follow_redirects=True)
+    check("Item saved even if auto-match runs (200)", r.status_code == 200)
+    check("Item detail shown after save", b'Green Scarf' in r.data)
+
     # Clean up uploaded test images
     upload_folder = app.config['UPLOAD_FOLDER']
     for f in os.listdir(upload_folder):

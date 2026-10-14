@@ -9,6 +9,7 @@ import os
 import uuid
 import logging
 from collections import namedtuple
+from typing import Optional, Tuple
 from werkzeug.utils import secure_filename
 from flask import current_app
 from services.integrity import calculate_sha256, calculate_sha256_bytes
@@ -37,7 +38,7 @@ def allowed_file(filename: str) -> bool:
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
 
-def _detect_mime(header: bytes) -> str | None:
+def _detect_mime(header: bytes) -> Optional[str]:
     if header[:3] == b'\xff\xd8\xff':
         return 'image/jpeg'
     if header[:8] == b'\x89PNG\r\n\x1a\n':
@@ -47,7 +48,7 @@ def _detect_mime(header: bytes) -> str | None:
     return None
 
 
-def _validate(file) -> tuple[str, bytes]:
+def _validate(file) -> Tuple[str, bytes]:
     """
     Validate extension and MIME header.
     Returns (ext, file_bytes) or raises ValueError.

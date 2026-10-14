@@ -1,7 +1,8 @@
 import hashlib
+from typing import Optional
 
 
-def calculate_sha256(file_path) -> str | None:
+def calculate_sha256(file_path) -> Optional[str]:
     """Calculate SHA-256 hash of a file on disk. Returns hex string or None."""
     sha256 = hashlib.sha256()
     try:

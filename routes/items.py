@@ -85,18 +85,22 @@ def _delete_stored_file(item):
 
 
 def _auto_match(item):
-    matches = find_matches_for_item(item)
-    for other, score, reasons in matches:
-        if item.item_type == 'LOST':
-            save_match(item.id, other.id, score, reasons)
-        else:
-            save_match(other.id, item.id, score, reasons)
-        if item.status == 'ACTIVE':
-            item.status = 'MATCHED'
-        if other.status == 'ACTIVE':
-            other.status = 'MATCHED'
-    if matches:
-        db.session.commit()
+    try:
+        matches = find_matches_for_item(item)
+        for other, score, reasons in matches:
+            if item.item_type == 'LOST':
+                save_match(item.id, other.id, score, reasons)
+            else:
+                save_match(other.id, item.id, score, reasons)
+            if item.status == 'ACTIVE':
+                item.status = 'MATCHED'
+            if other.status == 'ACTIVE':
+                other.status = 'MATCHED'
+        if matches:
+            db.session.commit()
+    except Exception as exc:
+        logger.error('Auto-match failed for item %s: %s', item.id, exc)
+        db.session.rollback()
 
 
 # ---------------------------------------------------------------------------

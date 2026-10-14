@@ -4,6 +4,10 @@ from flask import Flask, render_template
 from config import Config
 from extensions import db, login_manager
 
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s %(levelname)s %(name)s: %(message)s',
+)
 logger = logging.getLogger(__name__)
 
 
@@ -37,6 +41,7 @@ def create_app():
 
     @app.errorhandler(500)
     def server_error(e):
+        logger.error('500 error: %s', e, exc_info=True)
         return render_template('errors/500.html'), 500
 
     @app.errorhandler(403)

@@ -11,7 +11,7 @@ services:
       - key: RENDER
         value: true
       - key: PYTHON_VERSION
-        value: 3.13.3
+        value: 3.11.9
       # DATABASE_URL is intentionally omitted here.
       # Attach a Render PostgreSQL database to this service in the Render
       # dashboard — Render will inject DATABASE_URL automatically.
