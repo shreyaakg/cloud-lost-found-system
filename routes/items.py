@@ -118,6 +118,15 @@ def _get_image_url(item):
     return None
 
 
+def _build_image_url_map(items):
+    """
+    Build {item.id: image_url} for a list of items in one pass.
+    S3 presigned URLs are generated per-item so each card gets its own URL.
+    Items with no image map to None.
+    """
+    return {item.id: _get_image_url(item) for item in items}
+
+
 # ---------------------------------------------------------------------------
 # Report routes
 # ---------------------------------------------------------------------------
@@ -216,7 +225,8 @@ def lost_items():
 
     return render_template('items/list.html', items=items, item_type='LOST',
                            categories=CATEGORIES, q=q, category=category,
-                           location=location, status=status)
+                           location=location, status=status,
+                           image_urls=_build_image_url_map(items))
 
 
 @items_bp.route('/found-items')
@@ -241,7 +251,8 @@ def found_items():
 
     return render_template('items/list.html', items=items, item_type='FOUND',
                            categories=CATEGORIES, q=q, category=category,
-                           location=location, status=status)
+                           location=location, status=status,
+                           image_urls=_build_image_url_map(items))
 
 
 # ---------------------------------------------------------------------------

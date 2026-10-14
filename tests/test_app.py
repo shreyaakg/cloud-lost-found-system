@@ -416,9 +416,160 @@ with app.test_client() as c:
                 pass
 
 # ---------------------------------------------------------------------------
-# Connection pool config test (unit — no real DB needed)
+# Matching algorithm tests
 # ---------------------------------------------------------------------------
-print("\n--- Connection Pool Config Tests ---")
+print("\n--- Matching Algorithm Tests ---")
+
+with app.app_context():
+    from services.matching import compute_match_score, _detect_color_contradiction
+    from models.item import Item as ItemModel
+    from datetime import date
+
+    def make_item(name, category, description, location, item_type='LOST'):
+        i = ItemModel()
+        i.item_name = name
+        i.category = category
+        i.description = description
+        i.location = location
+        i.item_type = item_type
+        i.date_lost_found = date(2026, 10, 10)
+        i.contact = 'test@test.com'
+        i.user_id = 1
+        return i
+
+    # Black purse lost at library vs black purse found at library — strong match
+    lost_black  = make_item('purse', 'Accessories', 'black purse', 'library', 'LOST')
+    found_black = make_item('purse', 'Accessories', 'black purse found', 'library', 'FOUND')
+    score_bb, reasons_bb, conflicts_bb = compute_match_score(lost_black, found_black)
+    check("Black purse vs black purse scores >= 75", score_bb >= 75)
+    check("Black purse vs black purse has no conflicts", len(conflicts_bb) == 0)
+    check("Black purse vs black purse has matching reasons", len(reasons_bb) > 0)
+
+    # Black purse lost vs red purse found — penalised by color contradiction
+    found_red = make_item('purse', 'Accessories', 'red purse found in class', 'class', 'FOUND')
+    score_br, reasons_br, conflicts_br = compute_match_score(lost_black, found_red)
+    check("Black purse vs red purse has color conflict", len(conflicts_br) > 0)
+    check("Black purse vs red purse score < black vs black score", score_br < score_bb)
+    check("Black purse vs red purse score < 50 (below threshold)", score_br < 50)
+
+    # Black purse at library ranks above red purse in class
+    check("Black-library ranks above red-class", score_bb > score_br)
+
+    # Identical names, conflicting descriptions — contradiction detected
+    lost_blue  = make_item('backpack', 'Bags', 'blue backpack', 'cafeteria', 'LOST')
+    found_green = make_item('backpack', 'Bags', 'green backpack', 'cafeteria', 'FOUND')
+    score_bg, _, conflicts_bg = compute_match_score(lost_blue, found_green)
+    check("Blue vs green backpack has color conflict", len(conflicts_bg) > 0)
+    check("Blue vs green backpack score penalised", score_bg < 60)
+
+    # Same category, completely unrelated items — should not match
+    lost_phone  = make_item('phone', 'Electronics', 'samsung galaxy phone', 'bus stop', 'LOST')
+    found_laptop = make_item('laptop', 'Electronics', 'dell laptop computer', 'park', 'FOUND')
+    score_unrelated, _, _ = compute_match_score(lost_phone, found_laptop)
+    check("Unrelated electronics score < 50", score_unrelated < 50)
+
+    # Color contradiction detection unit tests
+    check("black vs red is a conflict",
+          len(_detect_color_contradiction('black purse', 'red purse')) > 0)
+    check("black vs black is NOT a conflict",
+          len(_detect_color_contradiction('black purse', 'black bag')) == 0)
+    check("no color words — no conflict",
+          len(_detect_color_contradiction('leather purse', 'small purse')) == 0)
+    check("blue vs green is a conflict",
+          len(_detect_color_contradiction('blue backpack', 'green backpack')) > 0)
+
+# ---------------------------------------------------------------------------
+# Image URL map tests (no S3 credentials — local fallback)
+# ---------------------------------------------------------------------------
+print("\n--- Image URL Map Tests ---")
+
+with app.app_context():
+    from routes.items import _build_image_url_map, _get_image_url
+    from models.item import Item as ItemModel
+
+    # Item with no image
+    i_none = ItemModel()
+    i_none.id = 9001
+    i_none.s3_object_key = None
+    i_none.image_filename = None
+    check("_get_image_url returns None for no-image item", _get_image_url(i_none) is None)
+
+    # Item with local filename
+    i_local = ItemModel()
+    i_local.id = 9002
+    i_local.s3_object_key = None
+    i_local.image_filename = 'test_abc123.jpg'
+    with app.test_request_context():
+        url_local = _get_image_url(i_local)
+    check("_get_image_url returns static path for local file",
+          url_local is not None and 'test_abc123.jpg' in url_local)
+
+    # Item with s3_object_key but S3 not configured — returns None gracefully
+    i_s3 = ItemModel()
+    i_s3.id = 9003
+    i_s3.s3_object_key = 'lost-items/abc123.jpg'
+    i_s3.image_filename = None
+    url_s3 = _get_image_url(i_s3)  # S3 not configured in test env
+    check("_get_image_url returns None when S3 not configured", url_s3 is None)
+
+    # _build_image_url_map returns correct keys
+    items_list = [i_none, i_local, i_s3]
+    with app.test_request_context():
+        url_map = _build_image_url_map(items_list)
+    check("image_url_map has entry for each item", len(url_map) == 3)
+    check("image_url_map key 9001 is None", url_map[9001] is None)
+    check("image_url_map key 9002 has local URL",
+          url_map[9002] is not None and 'test_abc123.jpg' in url_map[9002])
+    check("image_url_map key 9003 is None (S3 not configured)", url_map[9003] is None)
+
+    # Multiple items each get their OWN URL (not the same URL)
+    i_a = ItemModel(); i_a.id = 9010; i_a.s3_object_key = None; i_a.image_filename = 'img_a.jpg'
+    i_b = ItemModel(); i_b.id = 9011; i_b.s3_object_key = None; i_b.image_filename = 'img_b.jpg'
+    with app.test_request_context():
+        url_map2 = _build_image_url_map([i_a, i_b])
+    check("Each card gets its own image URL",
+          url_map2[9010] != url_map2[9011])
+    check("Card A URL contains img_a", 'img_a.jpg' in (url_map2[9010] or ''))
+    check("Card B URL contains img_b", 'img_b.jpg' in (url_map2[9011] or ''))
+
+# ---------------------------------------------------------------------------
+# Listing template receives image_urls (route integration)
+# ---------------------------------------------------------------------------
+print("\n--- Listing Route image_urls Integration Tests ---")
+
+with app.test_client() as c:
+    c.post('/login', data={'email': 'alice@test.com', 'password': 'secret123'})
+
+    # Post a lost item with a local image so we can verify the listing shows it
+    jpeg_bytes = b'\xff\xd8\xff\xe0' + b'\x00' * 500
+    from werkzeug.datastructures import FileStorage
+    fs2 = FileStorage(stream=io.BytesIO(jpeg_bytes), filename='purse.jpg',
+                      content_type='image/jpeg')
+    r = c.post('/report-lost', data={
+        'item_name': 'Black Purse', 'category': 'Accessories',
+        'description': 'black leather purse',
+        'location': 'library', 'date_lost_found': '2026-10-10',
+        'contact': 'alice@test.com', 'image': fs2
+    }, content_type='multipart/form-data', follow_redirects=True)
+    check("Black purse with image reported (200)", r.status_code == 200)
+
+    # The listing page must NOT show the placeholder text for this item
+    r = c.get('/lost-items')
+    check("Lost items listing loads (200)", r.status_code == 200)
+    check("Listing does not show S3 Image placeholder for local image",
+          b'S3 Image' not in r.data)
+    check("Listing shows Black Purse", b'Black Purse' in r.data)
+
+    # Clean up
+    upload_folder = app.config['UPLOAD_FOLDER']
+    for f in os.listdir(upload_folder):
+        if f != '.gitkeep' and f.endswith(('.jpg', '.jpeg', '.png', '.webp')):
+            try:
+                os.remove(os.path.join(upload_folder, f))
+            except OSError:
+                pass
+
+
 
 with app.app_context():
     # Verify engine options are applied to the SQLAlchemy engine
