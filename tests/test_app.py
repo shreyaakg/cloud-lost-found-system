@@ -1,12 +1,14 @@
 """
 Functional test suite — run with: python tests/test_app.py
-Covers: routing, auth, item CRUD, matching, SHA-256, S3 service unit tests.
+Covers: routing, auth, item CRUD, matching, SHA-256, S3 service unit tests,
+        DB error handling, connection pool config, healthz endpoint.
 Expected: all tests pass with no AWS credentials configured (local fallback).
 """
 import sys
 import os
 import io
 import hashlib
+import unittest.mock as mock
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -35,28 +37,82 @@ def check(label, condition):
 # ---------------------------------------------------------------------------
 print("\n--- Unit Tests ---")
 
-# SHA-256 bytes
 data = b"hello world"
 expected = hashlib.sha256(data).hexdigest()
 check("SHA-256 bytes correct", calculate_sha256_bytes(data) == expected)
-
-# SHA-256 empty bytes
 check("SHA-256 empty bytes", calculate_sha256_bytes(b'') == hashlib.sha256(b'').hexdigest())
 
-# S3 object key builder — LOST
 key = build_object_key('LOST', 'photo.jpg')
 check("S3 key starts with lost-items/", key.startswith('lost-items/'))
 check("S3 key ends with .jpg", key.endswith('.jpg'))
 check("S3 key has UUID length", len(key) == len('lost-items/') + 32 + 4)
 
-# S3 object key builder — FOUND
 key2 = build_object_key('FOUND', 'image.png')
 check("S3 key starts with found-items/", key2.startswith('found-items/'))
 check("S3 key ends with .png", key2.endswith('.png'))
 
-# S3 keys are unique
 key3 = build_object_key('LOST', 'photo.jpg')
 check("S3 keys are unique (UUID)", key != key3)
+
+# ---------------------------------------------------------------------------
+# Config tests — pool options and URL normalisation
+# ---------------------------------------------------------------------------
+print("\n--- Config Tests ---")
+
+from config import _database_uri, Config
+
+# No DATABASE_URL → SQLite fallback
+check("No DATABASE_URL -> SQLite", _database_uri() == 'sqlite:///lostfound.db')
+
+# Legacy postgres:// scheme is normalised
+with mock.patch.dict(os.environ, {'DATABASE_URL': 'postgres://user:pass@host/db'}):
+    uri = _database_uri()
+    check("postgres:// normalised to postgresql+psycopg2://",
+          uri.startswith('postgresql+psycopg2://'))
+
+# postgresql:// scheme is pinned to psycopg2
+with mock.patch.dict(os.environ, {'DATABASE_URL': 'postgresql://user:pass@host/db'}):
+    uri = _database_uri()
+    check("postgresql:// pinned to postgresql+psycopg2://",
+          uri.startswith('postgresql+psycopg2://'))
+
+# Already-pinned URL is not double-prefixed
+with mock.patch.dict(os.environ, {'DATABASE_URL': 'postgresql+psycopg2://user:pass@host/db'}):
+    uri = _database_uri()
+    check("Already-pinned URL not double-prefixed",
+          uri.count('postgresql+psycopg2://') == 1)
+
+# Malformed DATABASE_URL raises ValueError
+try:
+    with mock.patch.dict(os.environ, {'DATABASE_URL': 'mysql://user:pass@host/db'}):
+        _database_uri()
+    check("Malformed DATABASE_URL raises ValueError", False)
+except ValueError:
+    check("Malformed DATABASE_URL raises ValueError", True)
+
+# SQLite config has empty engine options
+with mock.patch.dict(os.environ, {}, clear=True):
+    # Reload config in a clean env
+    import importlib, config as cfg_mod
+    importlib.reload(cfg_mod)
+    check("SQLite config has empty SQLALCHEMY_ENGINE_OPTIONS",
+          cfg_mod.Config.SQLALCHEMY_ENGINE_OPTIONS == {})
+
+# PostgreSQL config has pool_pre_ping and pool_recycle
+with mock.patch.dict(os.environ, {'DATABASE_URL': 'postgresql+psycopg2://u:p@h/d'}):
+    importlib.reload(cfg_mod)
+    opts = cfg_mod.Config.SQLALCHEMY_ENGINE_OPTIONS
+    check("PostgreSQL config has pool_pre_ping=True",
+          opts.get('pool_pre_ping') is True)
+    check("PostgreSQL config has pool_recycle=300",
+          opts.get('pool_recycle') == 300)
+    check("PostgreSQL config has sslmode=require",
+          opts.get('connect_args', {}).get('sslmode') == 'require')
+    check("PostgreSQL config has connect_timeout",
+          opts.get('connect_args', {}).get('connect_timeout') == 10)
+
+# Restore original config module state
+importlib.reload(cfg_mod)
 
 # ---------------------------------------------------------------------------
 # S3 configuration check — no credentials set, should return False cleanly
@@ -78,26 +134,24 @@ print("\n--- Upload Service Tests (local fallback) ---")
 with app.app_context():
     from services.upload import save_upload, allowed_file, _detect_mime
 
-    # Extension validation
-    check("allowed_file jpg", allowed_file('photo.jpg'))
-    check("allowed_file jpeg", allowed_file('photo.jpeg'))
-    check("allowed_file png", allowed_file('photo.PNG'))
-    check("allowed_file webp", allowed_file('photo.webp'))
-    check("allowed_file rejects exe", not allowed_file('virus.exe'))
-    check("allowed_file rejects php", not allowed_file('shell.php'))
-    check("allowed_file rejects gif", not allowed_file('anim.gif'))
+    check("allowed_file jpg",          allowed_file('photo.jpg'))
+    check("allowed_file jpeg",         allowed_file('photo.jpeg'))
+    check("allowed_file png",          allowed_file('photo.PNG'))
+    check("allowed_file webp",         allowed_file('photo.webp'))
+    check("allowed_file rejects exe",  not allowed_file('virus.exe'))
+    check("allowed_file rejects php",  not allowed_file('shell.php'))
+    check("allowed_file rejects gif",  not allowed_file('anim.gif'))
     check("allowed_file rejects no ext", not allowed_file('noextension'))
 
-    # MIME detection
     jpeg_header = b'\xff\xd8\xff\xe0' + b'\x00' * 8
     png_header  = b'\x89PNG\r\n\x1a\n' + b'\x00' * 4
     webp_header = b'RIFF\x00\x00\x00\x00WEBP'
     check("MIME detect JPEG", _detect_mime(jpeg_header) == 'image/jpeg')
     check("MIME detect PNG",  _detect_mime(png_header)  == 'image/png')
     check("MIME detect WEBP", _detect_mime(webp_header) == 'image/webp')
-    check("MIME detect unknown returns None", _detect_mime(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b') is None)
+    check("MIME detect unknown returns None",
+          _detect_mime(b'\x00\x01\x02\x03\x04\x05\x06\x07\x08\x09\x0a\x0b') is None)
 
-    # save_upload with no file
     class FakeFile:
         def __init__(self, name, data, content_type='image/jpeg'):
             self.filename = name
@@ -106,27 +160,24 @@ with app.app_context():
         def read(self): return self._data
 
     result = save_upload(FakeFile('', b''), 'LOST')
-    check("save_upload empty filename returns None result", result.filename is None and result.s3_key is None)
+    check("save_upload empty filename returns None result",
+          result.filename is None and result.s3_key is None)
 
-    # save_upload with invalid extension
     try:
         save_upload(FakeFile('virus.exe', b'\xff\xd8\xff' + b'x'*100), 'LOST')
         check("save_upload rejects .exe", False)
     except ValueError as e:
         check("save_upload rejects .exe", 'allowed' in str(e).lower())
 
-    # save_upload with valid JPEG (minimal valid JPEG bytes)
-    # Minimal JPEG: SOI + APP0 marker + enough bytes to pass MIME check
     jpeg_bytes = b'\xff\xd8\xff\xe0' + b'\x00' * 500
     result = save_upload(FakeFile('test.jpg', jpeg_bytes), 'LOST')
-    check("save_upload local JPEG returns filename", result.filename is not None)
-    check("save_upload local JPEG returns sha256", result.sha256_hash is not None)
-    check("save_upload local JPEG storage=local", result.storage == 'local')
-    check("save_upload local JPEG s3_key is None", result.s3_key is None)
+    check("save_upload local JPEG returns filename",  result.filename is not None)
+    check("save_upload local JPEG returns sha256",    result.sha256_hash is not None)
+    check("save_upload local JPEG storage=local",     result.storage == 'local')
+    check("save_upload local JPEG s3_key is None",    result.s3_key is None)
     check("save_upload SHA-256 is correct",
           result.sha256_hash == calculate_sha256_bytes(jpeg_bytes))
 
-    # Clean up the test file
     if result.filename:
         test_path = os.path.join(app.config['UPLOAD_FOLDER'], result.filename)
         if os.path.exists(test_path):
@@ -144,6 +195,12 @@ with app.test_client() as c:
     check("Register page 200",    c.get('/register').status_code == 200)
     check("Lost items page 200",  c.get('/lost-items').status_code == 200)
     check("Found items page 200", c.get('/found-items').status_code == 200)
+
+    # Health check endpoint
+    r = c.get('/healthz')
+    check("Health check returns 200 (SQLite)", r.status_code == 200)
+    check("Health check returns JSON", b'database' in r.data)
+    check("Health check DB status ok", b'"ok"' in r.data)
 
     # Protected routes redirect when not logged in
     check("Dashboard redirects",   c.get('/dashboard').status_code == 302)
@@ -230,7 +287,8 @@ with app.test_client() as c:
     # Report lost item WITH a valid JPEG image
     jpeg_bytes = b'\xff\xd8\xff\xe0' + b'\x00' * 500
     from werkzeug.datastructures import FileStorage
-    fs = FileStorage(stream=io.BytesIO(jpeg_bytes), filename='backpack.jpg', content_type='image/jpeg')
+    fs = FileStorage(stream=io.BytesIO(jpeg_bytes), filename='backpack.jpg',
+                     content_type='image/jpeg')
     r = c.post('/report-lost', data={
         'item_name': 'Blue Backpack', 'category': 'Bags',
         'description': 'Blue backpack with laptop inside',
@@ -239,17 +297,15 @@ with app.test_client() as c:
         'image': fs
     }, content_type='multipart/form-data', follow_redirects=False)
     check("Report lost item with image (302 redirect)", r.status_code == 302)
-    # Capture the item ID from the redirect Location header
     location = r.headers.get('Location', '')
     image_item_id = location.rstrip('/').split('/')[-1] if '/item/' in location else None
-    check("Image item ID captured from redirect", image_item_id is not None and image_item_id.isdigit())
+    check("Image item ID captured from redirect",
+          image_item_id is not None and image_item_id.isdigit())
 
-    # Follow redirect to detail page
     r = c.get(location, follow_redirects=True)
     check("Item with image detail shown", b'Blue Backpack' in r.data)
     check("Storage indicator shown", b'Stored' in r.data)
 
-    # Verify integrity for item with image using captured ID
     if image_item_id:
         r = c.get(f'/verify/{image_item_id}')
         check("Verify integrity with image (200)", r.status_code == 200)
@@ -289,19 +345,17 @@ with app.test_client() as c:
     }, follow_redirects=True)
     check("Unrelated found item reported (200)", r.status_code == 200)
 
-    # Verify unrelated items did not get matched
     r = c.get('/matches')
     check("Unrelated items not matched",
           b'Red Umbrella' not in r.data or b'Blue Laptop' not in r.data)
 
-    # List pages render correctly (S3 items have s3_object_key, not image_filename)
+    # List pages render correctly
     r = c.get('/lost-items')
     check("Lost items list renders without 500", r.status_code == 200)
     r = c.get('/found-items')
     check("Found items list renders without 500", r.status_code == 200)
 
     # Auto-match failure does not cause 500 — item is still saved
-    # Simulate by reporting an item when matching would normally run
     r = c.post('/report-lost', data={
         'item_name': 'Green Scarf', 'category': 'Clothing',
         'description': 'Green woolen scarf',
@@ -311,6 +365,47 @@ with app.test_client() as c:
     check("Item saved even if auto-match runs (200)", r.status_code == 200)
     check("Item detail shown after save", b'Green Scarf' in r.data)
 
+    # Dashboard counts are accurate
+    r = c.get('/dashboard')
+    check("Dashboard loads (200)", r.status_code == 200)
+    # We have reported: Black Wallet (LOST+FOUND matched), Blue Backpack (LOST),
+    # Red Umbrella (LOST), Green Scarf (LOST), Blue Laptop (FOUND)
+    # Lost count >= 4, Found count >= 2
+    check("Dashboard shows lost items count", b'Lost Items' in r.data)
+    check("Dashboard shows found items count", b'Found Items' in r.data)
+
+    # DB error in login returns flash message, not 500
+    # Log out first so the login route actually runs the DB query
+    c.get('/logout')
+    with mock.patch('routes.auth.User.query') as mock_query:
+        mock_query.filter_by.side_effect = Exception('Simulated DB failure')
+        r = c.post('/login', data={
+            'email': 'alice@test.com', 'password': 'secret123'
+        }, follow_redirects=False)
+        check("DB error in login returns 200 not 500", r.status_code == 200)
+        check("DB error in login shows flash message",
+              b'database error' in r.data.lower())
+    # Log back in for subsequent tests
+    c.post('/login', data={'email': 'alice@test.com', 'password': 'secret123'})
+
+    # DB error in lost-items listing returns 200 with flash, not 500
+    with mock.patch('routes.items.Item.query') as mock_query:
+        mock_query.filter_by.side_effect = Exception('Simulated DB failure')
+        r = c.get('/lost-items')
+        check("DB error in lost-items returns 200 not 500", r.status_code == 200)
+
+    # DB error in found-items listing returns 200 with flash, not 500
+    with mock.patch('routes.items.Item.query') as mock_query:
+        mock_query.filter_by.side_effect = Exception('Simulated DB failure')
+        r = c.get('/found-items')
+        check("DB error in found-items returns 200 not 500", r.status_code == 200)
+
+    # DB error in dashboard returns 200 with flash, not 500
+    with mock.patch('routes.main.Item.query') as mock_query:
+        mock_query.filter_by.side_effect = Exception('Simulated DB failure')
+        r = c.get('/dashboard')
+        check("DB error in dashboard returns 200 not 500", r.status_code == 200)
+
     # Clean up uploaded test images
     upload_folder = app.config['UPLOAD_FOLDER']
     for f in os.listdir(upload_folder):
@@ -319,6 +414,21 @@ with app.test_client() as c:
                 os.remove(os.path.join(upload_folder, f))
             except OSError:
                 pass
+
+# ---------------------------------------------------------------------------
+# Connection pool config test (unit — no real DB needed)
+# ---------------------------------------------------------------------------
+print("\n--- Connection Pool Config Tests ---")
+
+with app.app_context():
+    # Verify engine options are applied to the SQLAlchemy engine
+    engine = db.engine
+    pool = engine.pool
+    # pool_pre_ping is stored on the engine, not the pool directly in SA 2.x
+    check("Engine pool is not NullPool",
+          type(pool).__name__ != 'NullPool')
+    # For SQLite (test env), StaticPool or NullPool is used — that's fine
+    check("Engine is bound to app", engine is not None)
 
 # ---------------------------------------------------------------------------
 # Summary

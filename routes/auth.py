@@ -1,8 +1,10 @@
+import logging
 from flask import Blueprint, render_template, redirect, url_for, flash, request
 from flask_login import login_user, logout_user, login_required, current_user
 from extensions import db
 from models.user import User
 
+logger = logging.getLogger(__name__)
 auth_bp = Blueprint('auth', __name__)
 
 
@@ -29,18 +31,35 @@ def register():
             errors.append('Password must be at least 6 characters.')
         if password != confirm:
             errors.append('Passwords do not match.')
-        if User.query.filter_by(email=email).first():
-            errors.append('Email already registered.')
+
+        if not errors:
+            try:
+                existing = User.query.filter_by(email=email).first()
+            except Exception as exc:
+                logger.error('DB error checking existing user: %s', exc)
+                db.session.rollback()
+                flash('A database error occurred. Please try again.', 'danger')
+                return render_template('auth/register.html', name=name, email=email, phone=phone)
+
+            if existing:
+                errors.append('Email already registered.')
 
         if errors:
             for e in errors:
                 flash(e, 'danger')
             return render_template('auth/register.html', name=name, email=email, phone=phone)
 
-        user = User(name=name, email=email, phone=phone)
-        user.set_password(password)
-        db.session.add(user)
-        db.session.commit()
+        try:
+            user = User(name=name, email=email, phone=phone)
+            user.set_password(password)
+            db.session.add(user)
+            db.session.commit()
+        except Exception as exc:
+            logger.error('DB error creating user: %s', exc)
+            db.session.rollback()
+            flash('A database error occurred during registration. Please try again.', 'danger')
+            return render_template('auth/register.html', name=name, email=email, phone=phone)
+
         flash('Registration successful. Please log in.', 'success')
         return redirect(url_for('auth.login'))
 
@@ -55,7 +74,14 @@ def login():
     if request.method == 'POST':
         email = request.form.get('email', '').strip().lower()
         password = request.form.get('password', '')
-        user = User.query.filter_by(email=email).first()
+
+        try:
+            user = User.query.filter_by(email=email).first()
+        except Exception as exc:
+            logger.error('DB error during login query: %s', exc)
+            db.session.rollback()
+            flash('A database error occurred. Please try again.', 'danger')
+            return render_template('auth/login.html')
 
         if user and user.check_password(password):
             login_user(user)
