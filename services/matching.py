@@ -147,13 +147,21 @@ def compute_match_score(lost: Item, found: Item) -> Tuple[float, List[str], List
 def find_matches_for_item(item: Item, threshold: float = 50.0):
     """
     Find all potential matches for a given item above the threshold.
+    Searches ACTIVE and MATCHED candidates (not RECOVERED or REJECTED).
     Returns list of (other_item, score, reasons_and_conflicts_combined).
     """
+    searchable = ('ACTIVE', 'MATCHED')
     if item.item_type == 'LOST':
-        candidates = Item.query.filter_by(item_type='FOUND', status='ACTIVE').all()
+        candidates = Item.query.filter(
+            Item.item_type == 'FOUND',
+            Item.status.in_(searchable)
+        ).all()
         pairs = [(item, c) for c in candidates if c.id != item.id]
     else:
-        candidates = Item.query.filter_by(item_type='LOST', status='ACTIVE').all()
+        candidates = Item.query.filter(
+            Item.item_type == 'LOST',
+            Item.status.in_(searchable)
+        ).all()
         pairs = [(c, item) for c in candidates if c.id != item.id]
 
     results = []
@@ -161,7 +169,6 @@ def find_matches_for_item(item: Item, threshold: float = 50.0):
         score, reasons, conflicts = compute_match_score(lost, found)
         if score >= threshold:
             other = found if item.item_type == 'LOST' else lost
-            # Merge reasons and conflicts into a single list for storage
             all_reasons = reasons + [f"CONFLICT: {c}" for c in conflicts]
             results.append((other, score, all_reasons))
 

@@ -84,7 +84,24 @@
             <p>{{ other.category }} &mdash; {{ other.location }}</p>
             <p class="match-reasons">{{ match.matching_reason }}</p>
           </div>
-          <span class="badge badge-{{ match.status.lower() }}">{{ match.status }}</span>
+          <div class="match-actions">
+            <span class="badge badge-{{ match.status.lower() }}">{{ match.status }}</span>
+            {% if match.status == 'PENDING' and current_user.is_authenticated
+               and current_user.id in (item.user_id, other.user_id) %}
+              <form method="POST"
+                    action="{{ url_for('items.confirm_recovery', match_id=match.id) }}"
+                    style="display:inline"
+                    onsubmit="return confirm('Confirm recovery? This will mark both items as RECOVERED.')">
+                <button type="submit" class="btn btn-sm btn-success">Confirm Recovery</button>
+              </form>
+              <form method="POST"
+                    action="{{ url_for('items.reject_match', match_id=match.id) }}"
+                    style="display:inline"
+                    onsubmit="return confirm('Reject this match?')">
+                <button type="submit" class="btn btn-sm btn-danger">Reject</button>
+              </form>
+            {% endif %}
+          </div>
         </div>
       {% endfor %}
     </div>

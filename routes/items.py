@@ -83,7 +83,12 @@ def _delete_stored_file(item):
 
 
 def _auto_match(item):
-    """Run matching after an item is saved. Errors are logged, never propagated."""
+    """
+    Run matching after an item is saved and persist match records.
+    Does NOT change item status — status is only updated when a user
+    explicitly confirms recovery via confirm_recovery().
+    Errors are logged, never propagated.
+    """
     try:
         matches = find_matches_for_item(item)
         for other, score, reasons in matches:
@@ -91,10 +96,6 @@ def _auto_match(item):
                 save_match(item.id, other.id, score, reasons)
             else:
                 save_match(other.id, item.id, score, reasons)
-            if item.status == 'ACTIVE':
-                item.status = 'MATCHED'
-            if other.status == 'ACTIVE':
-                other.status = 'MATCHED'
         if matches:
             db.session.commit()
     except Exception as exc:
@@ -369,18 +370,37 @@ def delete_item(item_id):
 
 
 # ---------------------------------------------------------------------------
-# Mark recovered
+# Mark recovered (single item — kept for items with no confirmed match)
 # ---------------------------------------------------------------------------
 
 @items_bp.route('/item/<int:item_id>/recover', methods=['POST'])
 @login_required
 def mark_recovered(item_id):
+    """
+    Mark a single item RECOVERED.  Also marks the paired item and any
+    PENDING match CONFIRMED when the item has exactly one PENDING match,
+    so both sides stay in sync.
+    """
     item = db.get_or_404(Item, item_id)
     if item.user_id != current_user.id:
         abort(403)
+    if item.status == 'RECOVERED':
+        flash('Item is already marked as recovered.', 'info')
+        return redirect(url_for('items.item_detail', item_id=item_id))
 
     try:
         item.status = 'RECOVERED'
+        # Sync the paired item and match if there is exactly one PENDING match
+        if item.item_type == 'LOST':
+            pending = Match.query.filter_by(lost_item_id=item.id, status='PENDING').all()
+        else:
+            pending = Match.query.filter_by(found_item_id=item.id, status='PENDING').all()
+        if len(pending) == 1:
+            m = pending[0]
+            m.status = 'CONFIRMED'
+            paired = m.found_item if item.item_type == 'LOST' else m.lost_item
+            if paired.status != 'RECOVERED':
+                paired.status = 'RECOVERED'
         db.session.commit()
     except Exception as exc:
         logger.error('DB error marking item %s recovered: %s', item_id, exc)
@@ -390,6 +410,95 @@ def mark_recovered(item_id):
 
     flash('Item marked as recovered.', 'success')
     return redirect(url_for('items.item_detail', item_id=item.id))
+
+
+# ---------------------------------------------------------------------------
+# Confirm recovery via a match record (atomic — updates both items + match)
+# ---------------------------------------------------------------------------
+
+@items_bp.route('/match/<int:match_id>/confirm', methods=['POST'])
+@login_required
+def confirm_recovery(match_id):
+    """
+    Confirm that a matched pair has been recovered.
+    Atomically sets:
+      - match.status        → CONFIRMED
+      - lost_item.status    → RECOVERED
+      - found_item.status   → RECOVERED
+    Authorization: the current user must own either the lost or found item.
+    Idempotent: already-CONFIRMED matches return a success message.
+    REJECTED matches cannot be confirmed.
+    """
+    match = db.get_or_404(Match, match_id)
+
+    lost  = match.lost_item
+    found = match.found_item
+
+    if current_user.id not in (lost.user_id, found.user_id):
+        abort(403)
+
+    if match.status == 'CONFIRMED':
+        flash('Recovery already confirmed.', 'info')
+        return redirect(url_for('items.item_detail', item_id=lost.id))
+
+    if match.status == 'REJECTED':
+        flash('This match was rejected and cannot be confirmed.', 'danger')
+        return redirect(url_for('items.item_detail', item_id=lost.id))
+
+    try:
+        match.status  = 'CONFIRMED'
+        lost.status   = 'RECOVERED'
+        found.status  = 'RECOVERED'
+        db.session.commit()
+    except Exception as exc:
+        logger.error('DB error confirming recovery for match %s: %s', match_id, exc)
+        db.session.rollback()
+        flash('A database error occurred. Please try again.', 'danger')
+        return redirect(url_for('items.matches'))
+
+    flash(
+        f'Recovery confirmed! "{lost.item_name}" has been marked recovered on both sides.',
+        'success'
+    )
+    return redirect(url_for('items.item_detail', item_id=lost.id))
+
+
+# ---------------------------------------------------------------------------
+# Reject a match
+# ---------------------------------------------------------------------------
+
+@items_bp.route('/match/<int:match_id>/reject', methods=['POST'])
+@login_required
+def reject_match(match_id):
+    """
+    Mark a match as REJECTED so it no longer appears as a candidate.
+    Authorization: current user must own either item in the pair.
+    """
+    match = db.get_or_404(Match, match_id)
+    lost  = match.lost_item
+    found = match.found_item
+
+    if current_user.id not in (lost.user_id, found.user_id):
+        abort(403)
+
+    if match.status == 'CONFIRMED':
+        flash('A confirmed recovery cannot be rejected.', 'danger')
+        return redirect(url_for('items.item_detail', item_id=lost.id))
+
+    if match.status == 'REJECTED':
+        flash('Match is already rejected.', 'info')
+        return redirect(url_for('items.item_detail', item_id=lost.id))
+
+    try:
+        match.status = 'REJECTED'
+        db.session.commit()
+    except Exception as exc:
+        logger.error('DB error rejecting match %s: %s', match_id, exc)
+        db.session.rollback()
+        flash('A database error occurred. Please try again.', 'danger')
+
+    flash('Match rejected.', 'info')
+    return redirect(url_for('items.item_detail', item_id=lost.id))
 
 
 # ---------------------------------------------------------------------------

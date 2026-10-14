@@ -115,7 +115,6 @@ class Config:
     AWS_ACCESS_KEY_ID     = os.environ.get('AWS_ACCESS_KEY_ID', '')
     AWS_SECRET_ACCESS_KEY = os.environ.get('AWS_SECRET_ACCESS_KEY', '')
     AWS_REGION            = os.environ.get('AWS_REGION', 'us-east-1')
-    S3_BUCKET_NAME        = os.environ.get('S3_BUCKET_NAME', '')
-
-    # Legacy key kept for backward compatibility with render.yaml
-    AWS_S3_BUCKET = os.environ.get('S3_BUCKET_NAME', os.environ.get('AWS_S3_BUCKET', ''))
+    # Accept either S3_BUCKET_NAME or the legacy AWS_S3_BUCKET env var name
+    S3_BUCKET_NAME        = os.environ.get('S3_BUCKET_NAME') or os.environ.get('AWS_S3_BUCKET', '')
+    AWS_S3_BUCKET         = S3_BUCKET_NAME  # kept for backward compatibility

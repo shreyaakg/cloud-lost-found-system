@@ -591,3 +591,302 @@ if FAIL:
     sys.exit(1)
 else:
     print("All tests passed!")
+
+
+# ---------------------------------------------------------------------------
+# Recovery workflow tests
+# ---------------------------------------------------------------------------
+print("\n--- Recovery Workflow Tests ---")
+
+with app.test_client() as c:
+    # Register two users
+    c.post('/register', data={
+        'name': 'Bob Owner', 'email': 'bob@test.com',
+        'phone': '1111111111', 'password': 'bobpass1',
+        'confirm_password': 'bobpass1'
+    })
+    c.post('/register', data={
+        'name': 'Carol Finder', 'email': 'carol@test.com',
+        'phone': '2222222222', 'password': 'carolpass1',
+        'confirm_password': 'carolpass1'
+    })
+
+    # Bob reports a lost water bottle
+    c.post('/login', data={'email': 'bob@test.com', 'password': 'bobpass1'})
+    r = c.post('/report-lost', data={
+        'item_name': 'Water Bottle', 'category': 'Other',
+        'description': 'Blue metal water bottle',
+        'location': 'Gym', 'date_lost_found': '2026-01-01',
+        'contact': 'bob@test.com'
+    }, follow_redirects=False)
+    check("Bob reports lost water bottle (302)", r.status_code == 302)
+
+    # Same user reports finding the same water bottle (same-user demo allowed)
+    r = c.post('/report-found', data={
+        'item_name': 'Water Bottle', 'category': 'Other',
+        'description': 'Blue metal water bottle found at gym',
+        'location': 'Gym', 'date_lost_found': '2026-01-02',
+        'contact': 'bob@test.com'
+    }, follow_redirects=False)
+    check("Same user reports found water bottle (302)", r.status_code == 302)
+
+    # Match should exist
+    r = c.get('/matches')
+    check("Water bottle match detected", b'Water Bottle' in r.data)
+
+    # Get the match id from the DB
+    with app.app_context():
+        from models.item import Item as _I, Match as _M
+        _lost  = _I.query.filter_by(item_name='Water Bottle', item_type='LOST').order_by(_I.id.desc()).first()
+        _found = _I.query.filter_by(item_name='Water Bottle', item_type='FOUND').order_by(_I.id.desc()).first()
+        _match = _M.query.filter_by(
+            lost_item_id=_lost.id, found_item_id=_found.id
+        ).first() if _lost and _found else None
+        check("Match record exists in DB", _match is not None)
+        check("Match status is PENDING", _match is not None and _match.status == 'PENDING')
+        mid = _match.id if _match else None
+        lost_id_wb  = _lost.id  if _lost  else None
+        found_id_wb = _found.id if _found else None
+
+    # Confirm recovery via match
+    if mid:
+        r = c.post(f'/match/{mid}/confirm', follow_redirects=True)
+        check("Confirm recovery returns 200", r.status_code == 200)
+        check("Success flash shown",
+              b'confirmed' in r.data.lower() or b'recovered' in r.data.lower())
+
+        with app.app_context():
+            from models.item import Item as _I2, Match as _M2
+            _m2 = db.session.get(_M2, mid)
+            _l2 = db.session.get(_I2, lost_id_wb)
+            _f2 = db.session.get(_I2, found_id_wb)
+            check("Match status is CONFIRMED after confirm", _m2.status == 'CONFIRMED')
+            check("Lost item is RECOVERED after confirm",   _l2.status == 'RECOVERED')
+            check("Found item is RECOVERED after confirm",  _f2.status == 'RECOVERED')
+
+        # Idempotent: confirming again returns info message, not error
+        r = c.post(f'/match/{mid}/confirm', follow_redirects=True)
+        check("Double-confirm is idempotent (200)", r.status_code == 200)
+
+    # Reject a PENDING match
+    r = c.post('/report-lost', data={
+        'item_name': 'Red Scarf', 'category': 'Clothing',
+        'description': 'red woolen scarf',
+        'location': 'Library', 'date_lost_found': '2026-02-01',
+        'contact': 'bob@test.com'
+    }, follow_redirects=False)
+    r = c.post('/report-found', data={
+        'item_name': 'Red Scarf', 'category': 'Clothing',
+        'description': 'red woolen scarf found',
+        'location': 'Library', 'date_lost_found': '2026-02-02',
+        'contact': 'bob@test.com'
+    }, follow_redirects=False)
+
+    with app.app_context():
+        from models.item import Item as _I3, Match as _M3
+        _ls = _I3.query.filter_by(item_name='Red Scarf', item_type='LOST').order_by(_I3.id.desc()).first()
+        _fs = _I3.query.filter_by(item_name='Red Scarf', item_type='FOUND').order_by(_I3.id.desc()).first()
+        _rm = _M3.query.filter_by(
+            lost_item_id=_ls.id, found_item_id=_fs.id
+        ).first() if _ls and _fs else None
+        rid = _rm.id if _rm else None
+
+    if rid:
+        r = c.post(f'/match/{rid}/reject', follow_redirects=True)
+        check("Reject match returns 200", r.status_code == 200)
+        with app.app_context():
+            from models.item import Match as _M4
+            _rm2 = db.session.get(_M4, rid)
+            check("Match status is REJECTED", _rm2.status == 'REJECTED')
+
+        # Cannot confirm a rejected match
+        r = c.post(f'/match/{rid}/confirm', follow_redirects=True)
+        check("Cannot confirm rejected match (200)", r.status_code == 200)
+        check("Rejected match confirm shows error", b'rejected' in r.data.lower())
+
+    # Unauthorized: Carol tries to confirm/reject Bob's matches
+    c.get('/logout')
+    c.post('/login', data={'email': 'carol@test.com', 'password': 'carolpass1'})
+    if mid:
+        r = c.post(f'/match/{mid}/confirm', follow_redirects=True)
+        check("Unauthorized confirm returns 403", r.status_code == 403)
+    if rid:
+        r = c.post(f'/match/{rid}/reject', follow_redirects=True)
+        check("Unauthorized reject returns 403", r.status_code == 403)
+    c.get('/logout')
+
+# ---------------------------------------------------------------------------
+# Dashboard / My Reports consistency after recovery
+# ---------------------------------------------------------------------------
+print("\n--- Dashboard & My Reports Consistency Tests ---")
+
+with app.test_client() as c:
+    c.post('/login', data={'email': 'bob@test.com', 'password': 'bobpass1'})
+    r = c.get('/dashboard')
+    check("Dashboard loads after recovery (200)", r.status_code == 200)
+    check("Dashboard shows Recovered stat", b'Recovered' in r.data)
+    r = c.get('/my-reports')
+    check("My Reports loads (200)", r.status_code == 200)
+    check("My Reports shows Water Bottle", b'Water Bottle' in r.data)
+    check("My Reports shows RECOVERED badge", b'RECOVERED' in r.data)
+    c.get('/logout')
+
+# ---------------------------------------------------------------------------
+# S3 config env var fallback (AWS_S3_BUCKET vs S3_BUCKET_NAME)
+# ---------------------------------------------------------------------------
+print("\n--- S3 Config Env Var Fallback Tests ---")
+
+import importlib
+import config as cfg_mod
+
+with mock.patch.dict(os.environ, {
+    'AWS_S3_BUCKET': 'my-legacy-bucket',
+    'AWS_ACCESS_KEY_ID': 'AKIATEST',
+    'AWS_SECRET_ACCESS_KEY': 'secret',
+    'AWS_REGION': 'us-east-1'
+}, clear=False):
+    importlib.reload(cfg_mod)
+    check("S3_BUCKET_NAME falls back to AWS_S3_BUCKET",
+          cfg_mod.Config.S3_BUCKET_NAME == 'my-legacy-bucket')
+
+with mock.patch.dict(os.environ, {
+    'S3_BUCKET_NAME': 'primary-bucket',
+    'AWS_S3_BUCKET': 'legacy-bucket',
+    'AWS_ACCESS_KEY_ID': 'AKIATEST',
+    'AWS_SECRET_ACCESS_KEY': 'secret',
+    'AWS_REGION': 'us-east-1'
+}, clear=False):
+    importlib.reload(cfg_mod)
+    check("S3_BUCKET_NAME takes priority over AWS_S3_BUCKET",
+          cfg_mod.Config.S3_BUCKET_NAME == 'primary-bucket')
+
+importlib.reload(cfg_mod)
+
+# ---------------------------------------------------------------------------
+# /debug-s3 endpoint
+# ---------------------------------------------------------------------------
+print("\n--- Debug S3 Endpoint Tests ---")
+
+with app.test_client() as c:
+    r = c.get('/debug-s3')
+    check("/debug-s3 returns 200", r.status_code == 200)
+    check("/debug-s3 returns JSON with s3_configured key", b's3_configured' in r.data)
+    check("/debug-s3 does not expose secret key value",
+          b'AKIATEST' not in r.data and b'bobpass1' not in r.data)
+
+# ---------------------------------------------------------------------------
+# Same-user lost+found pair still matches (matching.py searches ACTIVE+MATCHED)
+# ---------------------------------------------------------------------------
+print("\n--- Same-User Matching Tests ---")
+
+with app.app_context():
+    from services.matching import find_matches_for_item as _fmfi
+    from models.item import Item as _ItemM
+    from datetime import date as _date
+
+    _li = _ItemM(
+        user_id=99, item_type='LOST', item_name='Thermos',
+        category='Other', description='silver thermos flask',
+        location='Canteen', date_lost_found=_date(2026, 5, 1),
+        contact='x@x.com', status='ACTIVE'
+    )
+    _fi = _ItemM(
+        user_id=99, item_type='FOUND', item_name='Thermos',
+        category='Other', description='silver thermos flask found',
+        location='Canteen', date_lost_found=_date(2026, 5, 2),
+        contact='x@x.com', status='ACTIVE'
+    )
+    db.session.add_all([_li, _fi])
+    db.session.commit()
+
+    results = _fmfi(_li)
+    check("Same-user lost+found pair produces a match", len(results) > 0)
+    if results:
+        check("Same-user match score >= 75", results[0][1] >= 75)
+
+    from models.item import Match as _Mc
+    _Mc.query.filter(
+        (_Mc.lost_item_id == _li.id) | (_Mc.found_item_id == _fi.id)
+    ).delete(synchronize_session=False)
+    db.session.delete(_li)
+    db.session.delete(_fi)
+    db.session.commit()
+
+# ---------------------------------------------------------------------------
+# Transaction rollback: recovery fails midway
+# ---------------------------------------------------------------------------
+print("\n--- Transaction Rollback Tests ---")
+
+with app.test_client() as c:
+    c.post('/login', data={'email': 'bob@test.com', 'password': 'bobpass1'})
+
+    c.post('/report-lost', data={
+        'item_name': 'Rollback Test Item', 'category': 'Other',
+        'description': 'rollback test description',
+        'location': 'Test Location', 'date_lost_found': '2026-03-01',
+        'contact': 'bob@test.com'
+    }, follow_redirects=False)
+    c.post('/report-found', data={
+        'item_name': 'Rollback Test Item', 'category': 'Other',
+        'description': 'rollback test description found',
+        'location': 'Test Location', 'date_lost_found': '2026-03-02',
+        'contact': 'bob@test.com'
+    }, follow_redirects=False)
+
+    with app.app_context():
+        from models.item import Item as _Irb, Match as _Mrb
+        _lrb = _Irb.query.filter_by(item_name='Rollback Test Item', item_type='LOST').order_by(_Irb.id.desc()).first()
+        _frb = _Irb.query.filter_by(item_name='Rollback Test Item', item_type='FOUND').order_by(_Irb.id.desc()).first()
+        _mrb = _Mrb.query.filter_by(
+            lost_item_id=_lrb.id, found_item_id=_frb.id
+        ).first() if _lrb and _frb else None
+        rb_mid      = _mrb.id   if _mrb else None
+        rb_lost_id  = _lrb.id   if _lrb else None
+
+    if rb_mid:
+        with mock.patch('routes.items.db.session.commit',
+                        side_effect=Exception('Simulated commit failure')):
+            r = c.post(f'/match/{rb_mid}/confirm', follow_redirects=True)
+            check("Rollback: confirm with DB error returns 200", r.status_code == 200)
+            check("Rollback: error flash shown", b'database error' in r.data.lower())
+
+        with app.app_context():
+            from models.item import Item as _Irb2, Match as _Mrb2
+            _mc = db.session.get(_Mrb2, rb_mid)
+            _ic = db.session.get(_Irb2, rb_lost_id)
+            check("Rollback: match status still PENDING", _mc.status == 'PENDING')
+            check("Rollback: lost item status still ACTIVE", _ic.status == 'ACTIVE')
+
+    c.get('/logout')
+
+# ---------------------------------------------------------------------------
+# Duplicate match prevention
+# ---------------------------------------------------------------------------
+print("\n--- Duplicate Match Prevention Tests ---")
+
+with app.app_context():
+    from services.matching import save_match as _sm
+    from models.item import Item as _Idup, Match as _Mdup
+    _ld = _Idup.query.filter_by(item_name='Black Wallet', item_type='LOST').first()
+    _fd = _Idup.query.filter_by(item_name='Black Wallet', item_type='FOUND').first()
+    if _ld and _fd:
+        before = _Mdup.query.filter_by(
+            lost_item_id=_ld.id, found_item_id=_fd.id).count()
+        _sm(_ld.id, _fd.id, 85.0, ['Dup test'])
+        _sm(_ld.id, _fd.id, 85.0, ['Dup test'])
+        after = _Mdup.query.filter_by(
+            lost_item_id=_ld.id, found_item_id=_fd.id).count()
+        check("Duplicate save_match does not create extra records", after == before)
+    else:
+        check("Duplicate match test skipped (items not found)", True)
+
+# ---------------------------------------------------------------------------
+# Final summary
+# ---------------------------------------------------------------------------
+print()
+print(f"Results: {len(PASS)} passed, {len(FAIL)} failed")
+if FAIL:
+    print("Failed tests:", FAIL)
+    sys.exit(1)
+else:
+    print("All tests passed!")

@@ -74,6 +74,31 @@ def create_app():
         status = 200 if db_ok else 503
         return jsonify(database=db_msg, status='ok' if db_ok else 'error'), status
 
+    @app.route('/debug-s3')
+    def debug_s3():
+        """
+        Diagnostic endpoint — shows S3 configuration status without
+        exposing credentials.  Remove or restrict after debugging.
+        """
+        from flask import jsonify
+        from services.s3_service import is_s3_configured, check_s3_connection
+        cfg = app.config
+        bucket    = cfg.get('S3_BUCKET_NAME', '')
+        region    = cfg.get('AWS_REGION', '')
+        key_set   = bool(cfg.get('AWS_ACCESS_KEY_ID', '').strip())
+        secret_set = bool(cfg.get('AWS_SECRET_ACCESS_KEY', '').strip())
+        configured = is_s3_configured()
+        reachable, conn_err = check_s3_connection() if configured else (False, 'not configured')
+        return jsonify(
+            s3_configured=configured,
+            bucket_name=bucket or '(not set)',
+            region=region or '(not set)',
+            access_key_set=key_set,
+            secret_key_set=secret_set,
+            s3_reachable=reachable,
+            s3_error=conn_err,
+        ), 200
+
     with app.app_context():
         db_url = app.config['SQLALCHEMY_DATABASE_URI']
         if 'postgresql' in db_url or 'postgres' in db_url:

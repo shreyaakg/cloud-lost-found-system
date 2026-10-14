@@ -16,6 +16,7 @@
             <h4><a href="{{ url_for('items.item_detail', item_id=match.lost_item.id) }}">{{ match.lost_item.item_name }}</a></h4>
             <p>{{ match.lost_item.category }} &mdash; {{ match.lost_item.location }}</p>
             <p>{{ match.lost_item.date_lost_found.strftime('%d %b %Y') }}</p>
+            <span class="badge badge-{{ match.lost_item.status.lower() }}">{{ match.lost_item.status }}</span>
           </div>
 
           <div class="match-score-center">
@@ -30,14 +31,30 @@
             <h4><a href="{{ url_for('items.item_detail', item_id=match.found_item.id) }}">{{ match.found_item.item_name }}</a></h4>
             <p>{{ match.found_item.category }} &mdash; {{ match.found_item.location }}</p>
             <p>{{ match.found_item.date_lost_found.strftime('%d %b %Y') }}</p>
+            <span class="badge badge-{{ match.found_item.status.lower() }}">{{ match.found_item.status }}</span>
           </div>
         </div>
 
         <div class="match-reasons">
           <strong>Matching reasons:</strong> {{ match.matching_reason }}
         </div>
-        <div class="match-status">
-          Status: <span class="badge badge-{{ match.status.lower() }}">{{ match.status }}</span>
+        <div class="match-footer">
+          <span>Status: <span class="badge badge-{{ match.status.lower() }}">{{ match.status }}</span></span>
+          {% if match.status == 'PENDING' and current_user.is_authenticated
+             and current_user.id in (match.lost_item.user_id, match.found_item.user_id) %}
+            <form method="POST"
+                  action="{{ url_for('items.confirm_recovery', match_id=match.id) }}"
+                  style="display:inline"
+                  onsubmit="return confirm('Confirm recovery? Both items will be marked RECOVERED.')">
+              <button type="submit" class="btn btn-sm btn-success">Confirm Recovery</button>
+            </form>
+            <form method="POST"
+                  action="{{ url_for('items.reject_match', match_id=match.id) }}"
+                  style="display:inline"
+                  onsubmit="return confirm('Reject this match?')">
+              <button type="submit" class="btn btn-sm btn-danger">Reject</button>
+            </form>
+          {% endif %}
         </div>
       </div>
     {% endfor %}
