@@ -1,14 +1,24 @@
 """
 Matching service — compares lost and found item reports.
 
-Algorithm:
-  1. Compute weighted similarity across name, category, location, description.
-  2. Detect explicit color/attribute contradictions in description+name tokens.
-     A contradiction (e.g. "black" vs "red") applies a penalty that can
-     override a high name+category score.
-  3. Return score (0-100), matching reasons, and conflicting details so users
-     can make an informed decision.
-  4. Never auto-mark an item recovered — that requires explicit user action.
+Algorithm
+---------
+1. Compute weighted token-overlap similarity across name, category,
+   location and description.
+2. Detect explicit colour contradictions (e.g. "black" vs "red") and
+   apply a configurable penalty that can override a high name+category score.
+3. Return score (0–100), human-readable positive reasons, and conflict
+   strings so users can make an informed decision.
+4. Never auto-mark an item recovered — that requires explicit user action.
+
+Thresholds (configurable via THRESHOLDS dict)
+---------------------------------------------
+  75–100  Strong candidate
+  50–74   Potential match
+  30–49   Possible match
+  < 30    Not displayed by default
+
+These are candidate-confidence scores, not statistical probabilities.
 """
 
 import re
@@ -26,9 +36,21 @@ WEIGHTS = {
     'description': 0.15,
 }
 
-# Common color words used for contradiction detection.
-# Two items whose combined text contains members of different color groups
-# are penalised.
+# ---------------------------------------------------------------------------
+# Display thresholds — change these to adjust category boundaries
+# ---------------------------------------------------------------------------
+THRESHOLDS = {
+    'strong':   75.0,   # >= 75  → Strong candidate
+    'potential': 50.0,  # >= 50  → Potential match
+    'possible':  30.0,  # >= 30  → Possible match
+    'hidden':     0.0,  # <  30  → Not shown by default
+}
+
+# Penalty per detected colour contradiction.
+# 40 pts drops a name+category-only match (60 pts) below the potential threshold.
+_CONTRADICTION_PENALTY = 40.0
+
+# Colour groups — words within the same group do NOT conflict with each other.
 _COLOR_GROUPS = [
     {'black', 'dark'},
     {'white', 'cream', 'ivory'},
@@ -43,10 +65,39 @@ _COLOR_GROUPS = [
     {'grey', 'gray', 'silver'},
 ]
 
-# Penalty applied when a clear color contradiction is detected.
-# 40 points is enough to drop a name+category match (60 pts) below threshold.
-_CONTRADICTION_PENALTY = 40.0
 
+# ---------------------------------------------------------------------------
+# Public helpers
+# ---------------------------------------------------------------------------
+
+def match_category(score: float) -> str:
+    """
+    Return the display category label for a given score.
+    Used by templates to section matches and colour score badges.
+    """
+    if score >= THRESHOLDS['strong']:
+        return 'strong'
+    if score >= THRESHOLDS['potential']:
+        return 'potential'
+    if score >= THRESHOLDS['possible']:
+        return 'possible'
+    return 'hidden'
+
+
+def match_category_label(score: float) -> str:
+    """Human-readable label for the match category."""
+    labels = {
+        'strong':   'Strong Candidate',
+        'potential': 'Potential Match',
+        'possible':  'Possible Match',
+        'hidden':    'Low Confidence',
+    }
+    return labels[match_category(score)]
+
+
+# ---------------------------------------------------------------------------
+# Internal helpers
+# ---------------------------------------------------------------------------
 
 def _normalise(text: str) -> str:
     """Lowercase, collapse whitespace, strip punctuation."""
@@ -69,43 +120,57 @@ def _token_overlap(a: str, b: str) -> float:
 
 def _detect_color_contradiction(text_a: str, text_b: str) -> List[str]:
     """
-    Return a list of contradiction strings if the two texts contain color
-    words from different color groups.  Empty list means no contradiction.
+    Return a list of conflict strings when the two texts contain colour words
+    from *different* colour groups.  Empty list means no contradiction.
 
-    Example: text_a='black purse', text_b='red purse' ->
-             ['Color conflict: black vs red']
+    Example:
+        _detect_color_contradiction('black purse', 'red purse')
+        → ['Color conflict: black vs red']
     """
     ta, tb = _tokens(text_a), _tokens(text_b)
     conflicts = []
     for group in _COLOR_GROUPS:
         colors_a = ta & group
-        colors_b = tb & group
-        # Both texts mention the SAME color group — no conflict
-        if colors_a and colors_b:
+        if not colors_a:
             continue
-        # One text has a color from this group, the other has a color from a
-        # different group — check all other groups for the other text
-        if colors_a:
-            for other_group in _COLOR_GROUPS:
-                if other_group is group:
-                    continue
-                colors_b_other = tb & other_group
-                if colors_b_other:
-                    conflicts.append(
-                        f"Color conflict: {', '.join(sorted(colors_a))} "
-                        f"vs {', '.join(sorted(colors_b_other))}"
-                    )
+        # colors_a is present — check whether text_b has a colour from a
+        # *different* group (same group = no conflict)
+        same_group_in_b = tb & group
+        if same_group_in_b:
+            continue  # same colour family, no conflict
+        for other_group in _COLOR_GROUPS:
+            if other_group is group:
+                continue
+            colors_b_other = tb & other_group
+            if colors_b_other:
+                conflicts.append(
+                    f"Color conflict: {', '.join(sorted(colors_a))} "
+                    f"vs {', '.join(sorted(colors_b_other))}"
+                )
     return conflicts
 
+
+# ---------------------------------------------------------------------------
+# Core scoring
+# ---------------------------------------------------------------------------
 
 def compute_match_score(lost: Item, found: Item) -> Tuple[float, List[str], List[str]]:
     """
     Compare a lost item against a found item.
 
-    Returns:
-        score        — float 0-100 (after contradiction penalty)
-        reasons      — list of positive matching reason strings
-        conflicts    — list of contradiction strings (empty when none found)
+    Returns
+    -------
+    score     : float 0–100 (after contradiction penalty)
+    reasons   : list of positive matching reason strings
+    conflicts : list of contradiction strings (empty when none found)
+
+    Rules
+    -----
+    - Identical names alone do NOT guarantee a strong match; location and
+      description must also agree for a high score.
+    - Missing fields (empty string) contribute 0 to their component — they
+      are neither counted as agreement nor disagreement.
+    - Each detected colour contradiction subtracts _CONTRADICTION_PENALTY pts.
     """
     reasons: List[str] = []
     conflicts: List[str] = []
@@ -122,34 +187,50 @@ def compute_match_score(lost: Item, found: Item) -> Tuple[float, List[str], List
         desc_sim * WEIGHTS['description']
     ) * 100
 
-    # Detect color contradictions across all text fields combined
+    # Colour contradiction detection across name + description combined
     combined_lost  = f"{lost.item_name} {lost.description}"
     combined_found = f"{found.item_name} {found.description}"
     conflicts = _detect_color_contradiction(combined_lost, combined_found)
 
-    # Apply penalty: each distinct contradiction reduces the score
     penalty = _CONTRADICTION_PENALTY * len(conflicts)
     score = max(0.0, raw_score - penalty)
 
-    # Build human-readable reasons
-    if name_sim > 0:
-        reasons.append(f"Item name similarity: {name_sim * 100:.0f}%")
+    # Build human-readable positive reasons
+    if name_sim >= 1.0:
+        reasons.append(f"Exact name match: \"{lost.item_name}\"")
+    elif name_sim > 0:
+        reasons.append(f"Name similarity: {name_sim * 100:.0f}%")
     if cat_sim:
         reasons.append(f"Same category: {lost.category}")
-    if loc_sim > 0:
+    if loc_sim >= 1.0:
+        reasons.append(f"Same location: \"{lost.location}\"")
+    elif loc_sim > 0:
         reasons.append(f"Location similarity: {loc_sim * 100:.0f}%")
-    if desc_sim > 0:
+    if desc_sim >= 1.0:
+        reasons.append("Description matches exactly")
+    elif desc_sim > 0:
         reasons.append(f"Description similarity: {desc_sim * 100:.0f}%")
 
     return round(score, 1), reasons, conflicts
 
 
-def find_matches_for_item(item: Item, threshold: float = 50.0):
+# ---------------------------------------------------------------------------
+# Candidate search
+# ---------------------------------------------------------------------------
+
+def find_matches_for_item(item: Item, threshold: float = None):
     """
-    Find all potential matches for a given item above the threshold.
-    Searches ACTIVE and MATCHED candidates (not RECOVERED or REJECTED).
+    Find all potential matches for a given item at or above the threshold.
+
+    Searches ACTIVE and MATCHED candidates (not RECOVERED).
     Returns list of (other_item, score, reasons_and_conflicts_combined).
+
+    threshold defaults to THRESHOLDS['possible'] (30) so possible matches
+    are stored; the UI filters by category.
     """
+    if threshold is None:
+        threshold = THRESHOLDS['possible']
+
     searchable = ('ACTIVE', 'MATCHED')
     if item.item_type == 'LOST':
         candidates = Item.query.filter(
@@ -176,9 +257,13 @@ def find_matches_for_item(item: Item, threshold: float = 50.0):
     return results
 
 
+# ---------------------------------------------------------------------------
+# Persistence
+# ---------------------------------------------------------------------------
+
 def save_match(lost_item_id: int, found_item_id: int,
                score: float, reasons: List[str]) -> Match:
-    """Persist a match record, avoiding duplicates."""
+    """Persist a match record, updating score/reasons if it already exists."""
     existing = Match.query.filter_by(
         lost_item_id=lost_item_id,
         found_item_id=found_item_id

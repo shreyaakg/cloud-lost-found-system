@@ -35,6 +35,9 @@ def create_app():
     app.register_blueprint(main_bp)
     app.register_blueprint(items_bp)
 
+    from services.matching import match_category, match_category_label
+    app.jinja_env.globals['match_category'] = match_category
+    app.jinja_env.globals['match_category_label'] = match_category_label
     @app.teardown_appcontext
     def shutdown_session(exception=None):
         """Return the connection to the pool at the end of every request."""

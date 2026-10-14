@@ -1,68 +1,176 @@
 {% extends 'base.html' %}
 {% block title %}Matches - LostFound Cloud{% endblock %}
 {% block content %}
+
 <div class="page-header">
-  <h2>Item Matches</h2>
-  <p>Items matched by name, category, location and description similarity.</p>
+  <h2>🔗 Item Matches</h2>
+  <p>Candidate pairs identified by name, category, location and description similarity.
+     Scores are confidence indicators, not proof of identity.</p>
 </div>
 
+{# ── Filter bar ── #}
+<form class="search-bar" method="GET" action="{{ url_for('items.matches') }}">
+  <select name="category">
+    <option value="" {% if not filter_category %}selected{% endif %}>All Categories</option>
+    <option value="strong"    {% if filter_category == 'strong'    %}selected{% endif %}>Strong Candidates (≥{{ thresholds.strong|int }}%)</option>
+    <option value="potential" {% if filter_category == 'potential' %}selected{% endif %}>Potential Matches (≥{{ thresholds.potential|int }}%)</option>
+    <option value="possible"  {% if filter_category == 'possible'  %}selected{% endif %}>Possible Matches (≥{{ thresholds.possible|int }}%)</option>
+  </select>
+  <select name="status">
+    <option value="" {% if not filter_status %}selected{% endif %}>All Statuses</option>
+    <option value="PENDING"   {% if filter_status == 'PENDING'   %}selected{% endif %}>Pending</option>
+    <option value="CONFIRMED" {% if filter_status == 'CONFIRMED' %}selected{% endif %}>Confirmed</option>
+    <option value="REJECTED"  {% if filter_status == 'REJECTED'  %}selected{% endif %}>Rejected</option>
+  </select>
+  <button type="submit" class="btn btn-primary">Filter</button>
+  <a href="{{ url_for('items.matches') }}" class="btn btn-outline">Clear</a>
+</form>
+
+{# ── Summary counts ── #}
 {% if matches %}
-  <div class="matches-list">
-    {% for match in matches %}
-      <div class="match-card-full">
+<div class="match-summary-bar">
+  <span class="match-count-badge match-count-strong">🟢 {{ strong|length }} Strong</span>
+  <span class="match-count-badge match-count-potential">🟡 {{ potential|length }} Potential</span>
+  <span class="match-count-badge match-count-possible">🔵 {{ possible|length }} Possible</span>
+</div>
+{% endif %}
+
+{% macro render_section(section_matches, section_title, section_class) %}
+  {% if section_matches %}
+  <div class="match-section">
+    <h3 class="match-section-title {{ section_class }}">{{ section_title }}</h3>
+    {% for match, cat, pos_reasons, neg_reasons in section_matches %}
+      {% set lost_img  = image_urls.get(match.lost_item_id) %}
+      {% set found_img = image_urls.get(match.found_item_id) %}
+
+      <div class="match-card-full match-card-{{ cat }}">
+
+        {# Score + labels #}
+        <div class="match-card-header">
+          <div class="score-circle score-{{ cat }}">{{ match.match_score }}%</div>
+          <div class="match-card-meta">
+            <span class="match-category-label label-{{ cat }}">{{ match_category_label(match.match_score) }}</span>
+            <span class="badge badge-{{ match.status.lower() }}">{{ match.status }}</span>
+          </div>
+        </div>
+
+        {# Item pair #}
         <div class="match-pair">
+
+          {# Lost item #}
           <div class="match-item match-lost">
-            <span class="badge badge-type-lost">LOST</span>
-            <h4><a href="{{ url_for('items.item_detail', item_id=match.lost_item.id) }}">{{ match.lost_item.item_name }}</a></h4>
-            <p>{{ match.lost_item.category }} &mdash; {{ match.lost_item.location }}</p>
-            <p>{{ match.lost_item.date_lost_found.strftime('%d %b %Y') }}</p>
-            <span class="badge badge-{{ match.lost_item.status.lower() }}">{{ match.lost_item.status }}</span>
-          </div>
-
-          <div class="match-score-center">
-            <div class="score-circle {% if match.match_score >= 75 %}score-high{% elif match.match_score >= 50 %}score-medium{% endif %}">
-              {{ match.match_score }}%
+            <div class="match-item-image-wrap">
+              {% if lost_img %}
+                <img src="{{ lost_img }}" alt="{{ match.lost_item.item_name }}"
+                     class="match-item-image" loading="lazy"
+                     onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                <div class="match-item-image-fallback" style="display:none">📷 Unavailable</div>
+              {% elif match.lost_item.s3_object_key %}
+                <div class="match-item-image-fallback">☁️ Unavailable</div>
+              {% else %}
+                <div class="match-item-image-fallback">No image</div>
+              {% endif %}
             </div>
-            <p>Match Score</p>
+            <div class="match-item-info">
+              <span class="badge badge-type-lost">LOST</span>
+              <h4><a href="{{ url_for('items.item_detail', item_id=match.lost_item.id) }}">{{ match.lost_item.item_name }}</a></h4>
+              <p>📁 {{ match.lost_item.category }}</p>
+              <p>📍 {{ match.lost_item.location }}</p>
+              <p>📅 {{ match.lost_item.date_lost_found.strftime('%d %b %Y') }}</p>
+              <p class="match-item-desc">{{ match.lost_item.description[:80] }}{% if match.lost_item.description|length > 80 %}…{% endif %}</p>
+              <span class="badge badge-{{ match.lost_item.status.lower() }}">{{ match.lost_item.status }}</span>
+            </div>
           </div>
 
+          <div class="match-vs">VS</div>
+
+          {# Found item #}
           <div class="match-item match-found">
-            <span class="badge badge-type-found">FOUND</span>
-            <h4><a href="{{ url_for('items.item_detail', item_id=match.found_item.id) }}">{{ match.found_item.item_name }}</a></h4>
-            <p>{{ match.found_item.category }} &mdash; {{ match.found_item.location }}</p>
-            <p>{{ match.found_item.date_lost_found.strftime('%d %b %Y') }}</p>
-            <span class="badge badge-{{ match.found_item.status.lower() }}">{{ match.found_item.status }}</span>
+            <div class="match-item-image-wrap">
+              {% if found_img %}
+                <img src="{{ found_img }}" alt="{{ match.found_item.item_name }}"
+                     class="match-item-image" loading="lazy"
+                     onerror="this.style.display='none';this.nextElementSibling.style.display='flex'">
+                <div class="match-item-image-fallback" style="display:none">📷 Unavailable</div>
+              {% elif match.found_item.s3_object_key %}
+                <div class="match-item-image-fallback">☁️ Unavailable</div>
+              {% else %}
+                <div class="match-item-image-fallback">No image</div>
+              {% endif %}
+            </div>
+            <div class="match-item-info">
+              <span class="badge badge-type-found">FOUND</span>
+              <h4><a href="{{ url_for('items.item_detail', item_id=match.found_item.id) }}">{{ match.found_item.item_name }}</a></h4>
+              <p>📁 {{ match.found_item.category }}</p>
+              <p>📍 {{ match.found_item.location }}</p>
+              <p>📅 {{ match.found_item.date_lost_found.strftime('%d %b %Y') }}</p>
+              <p class="match-item-desc">{{ match.found_item.description[:80] }}{% if match.found_item.description|length > 80 %}…{% endif %}</p>
+              <span class="badge badge-{{ match.found_item.status.lower() }}">{{ match.found_item.status }}</span>
+            </div>
           </div>
         </div>
 
-        <div class="match-reasons">
-          <strong>Matching reasons:</strong> {{ match.matching_reason }}
+        {# Reasons & conflicts #}
+        <div class="match-evidence">
+          {% if pos_reasons %}
+          <div class="match-reasons-block">
+            <strong>✅ Why it matches:</strong>
+            <ul>{% for r in pos_reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+          </div>
+          {% endif %}
+          {% if neg_reasons %}
+          <div class="match-conflicts-block">
+            <strong>⚠️ Conflicting details:</strong>
+            <ul>{% for r in neg_reasons %}<li>{{ r }}</li>{% endfor %}</ul>
+          </div>
+          {% endif %}
         </div>
+
+        {# Actions #}
         <div class="match-footer">
-          <span>Status: <span class="badge badge-{{ match.status.lower() }}">{{ match.status }}</span></span>
           {% if match.status == 'PENDING' and current_user.is_authenticated
              and current_user.id in (match.lost_item.user_id, match.found_item.user_id) %}
             <form method="POST"
                   action="{{ url_for('items.confirm_recovery', match_id=match.id) }}"
                   style="display:inline"
                   onsubmit="return confirm('Confirm recovery? Both items will be marked RECOVERED.')">
-              <button type="submit" class="btn btn-sm btn-success">Confirm Recovery</button>
+              <button type="submit" class="btn btn-sm btn-success">✔ Confirm Recovery</button>
             </form>
             <form method="POST"
                   action="{{ url_for('items.reject_match', match_id=match.id) }}"
                   style="display:inline"
                   onsubmit="return confirm('Reject this match?')">
-              <button type="submit" class="btn btn-sm btn-danger">Reject</button>
+              <button type="submit" class="btn btn-sm btn-danger">✖ Reject</button>
             </form>
+          {% elif match.status == 'CONFIRMED' %}
+            <span class="match-action-note">✔ Recovery confirmed</span>
+          {% elif match.status == 'REJECTED' %}
+            <span class="match-action-note">✖ Match rejected</span>
+          {% else %}
+            <span class="match-action-note">Log in as the item owner to take action.</span>
           {% endif %}
         </div>
+
       </div>
     {% endfor %}
   </div>
+  {% endif %}
+{% endmacro %}
+
+{% if matches %}
+  {{ render_section(strong,    '🟢 Strong Candidates',  'section-strong') }}
+  {{ render_section(potential, '🟡 Potential Matches',  'section-potential') }}
+  {{ render_section(possible,  '🔵 Possible Matches',   'section-possible') }}
 {% else %}
   <div class="empty-state">
-    <p>No matches found yet. Report more items to see automatic matches.</p>
-    <a href="{{ url_for('items.report_lost') }}" class="btn btn-primary">Report Lost Item</a>
+    <p>No matches found{% if filter_category or filter_status %} for the selected filters{% endif %}.</p>
+    {% if filter_category or filter_status %}
+      <a href="{{ url_for('items.matches') }}" class="btn btn-outline">Clear filters</a>
+    {% else %}
+      <p>Report more items to see automatic candidate matches.</p>
+      <a href="{{ url_for('items.report_lost') }}" class="btn btn-primary">Report Lost Item</a>
+    {% endif %}
   </div>
 {% endif %}
+
 {% endblock %}

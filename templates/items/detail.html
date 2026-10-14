@@ -73,16 +73,38 @@
 
 {% if matches %}
   <div class="matches-section">
-    <h3>Possible Matches ({{ matches|length }})</h3>
+    <h3>Candidate Matches ({{ matches|length }})</h3>
     <div class="matches-list">
       {% for match in matches %}
         {% set other = match.found_item if item.item_type == 'LOST' else match.lost_item %}
-        <div class="match-card">
-          <div class="match-score-badge">{{ match.match_score }}%</div>
+        {% set other_img = match_image_urls.get(other.id) %}
+        {% set cat = match_category(match.match_score) %}
+        <div class="match-card match-card-{{ cat }}">
+          <div class="match-score-badge score-badge-{{ cat }}">{{ match.match_score }}%</div>
+          <div class="match-item-thumb">
+            {% if other_img %}
+              <img src="{{ other_img }}" alt="{{ other.item_name }}" class="match-thumb-img"
+                   onerror="this.style.display='none'">
+            {% elif other.s3_object_key %}
+              <div class="match-thumb-placeholder">☁️</div>
+            {% else %}
+              <div class="match-thumb-placeholder">📷</div>
+            {% endif %}
+          </div>
           <div class="match-info">
-            <h4><a href="{{ url_for('items.item_detail', item_id=other.id) }}">{{ other.item_name }}</a></h4>
+            <div class="match-info-top">
+              <h4><a href="{{ url_for('items.item_detail', item_id=other.id) }}">{{ other.item_name }}</a></h4>
+              <span class="match-category-label label-{{ cat }}">{{ match_category_label(match.match_score) }}</span>
+            </div>
             <p>{{ other.category }} &mdash; {{ other.location }}</p>
-            <p class="match-reasons">{{ match.matching_reason }}</p>
+            {% set raw_reasons = match.matching_reason.split('; ') if match.matching_reason else [] %}
+            {% set pos_r = [] %}{% set neg_r = [] %}
+            {% for r in raw_reasons %}
+              {% if 'CONFLICT:' in r %}{% set _ = neg_r.append(r.replace('CONFLICT:', '').strip()) %}
+              {% else %}{% set _ = pos_r.append(r) %}{% endif %}
+            {% endfor %}
+            {% if pos_r %}<p class="match-reasons">✅ {{ pos_r | join(' · ') }}</p>{% endif %}
+            {% if neg_r %}<p class="match-conflicts">⚠️ {{ neg_r | join(' · ') }}</p>{% endif %}
           </div>
           <div class="match-actions">
             <span class="badge badge-{{ match.status.lower() }}">{{ match.status }}</span>

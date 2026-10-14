@@ -890,3 +890,338 @@ if FAIL:
     sys.exit(1)
 else:
     print("All tests passed!")
+
+
+# ===========================================================================
+# NEW TESTS — matching system, thresholds, UI, filters, S3 fallback
+# ===========================================================================
+
+# ---------------------------------------------------------------------------
+# Threshold and category tests
+# ---------------------------------------------------------------------------
+print("\n--- Threshold & Category Tests ---")
+
+with app.app_context():
+    from services.matching import (
+        match_category, match_category_label, THRESHOLDS,
+        compute_match_score, _detect_color_contradiction
+    )
+    from models.item import Item as _TI
+    from datetime import date as _d
+
+    check("THRESHOLDS has strong key",   'strong'   in THRESHOLDS)
+    check("THRESHOLDS has potential key",'potential' in THRESHOLDS)
+    check("THRESHOLDS has possible key", 'possible'  in THRESHOLDS)
+    check("strong threshold >= 75",  THRESHOLDS['strong']   >= 75)
+    check("potential threshold >= 50", THRESHOLDS['potential'] >= 50)
+    check("possible threshold >= 30",  THRESHOLDS['possible']  >= 30)
+
+    check("match_category 80 -> strong",    match_category(80.0) == 'strong')
+    check("match_category 75 -> strong",    match_category(75.0) == 'strong')
+    check("match_category 60 -> potential", match_category(60.0) == 'potential')
+    check("match_category 50 -> potential", match_category(50.0) == 'potential')
+    check("match_category 40 -> possible",  match_category(40.0) == 'possible')
+    check("match_category 30 -> possible",  match_category(30.0) == 'possible')
+    check("match_category 20 -> hidden",    match_category(20.0) == 'hidden')
+    check("match_category 0  -> hidden",    match_category(0.0)  == 'hidden')
+
+    check("label for 80 is Strong Candidate",
+          'Strong' in match_category_label(80.0))
+    check("label for 60 is Potential Match",
+          'Potential' in match_category_label(60.0))
+    check("label for 35 is Possible Match",
+          'Possible' in match_category_label(35.0))
+
+    def _mi(name, cat, desc, loc, itype='LOST'):
+        i = _TI()
+        i.item_name = name; i.category = cat; i.description = desc
+        i.location = loc; i.item_type = itype
+        i.date_lost_found = _d(2026, 1, 1); i.contact = 'x'; i.user_id = 1
+        return i
+
+    # Same name + category + location + description → strong
+    l1 = _mi('wallet', 'Accessories', 'black leather wallet', 'library')
+    f1 = _mi('wallet', 'Accessories', 'black leather wallet found', 'library', 'FOUND')
+    s1, r1, c1 = compute_match_score(l1, f1)
+    check("Identical item scores strong (>=75)", s1 >= 75)
+    check("Identical item has no conflicts", len(c1) == 0)
+    check("Identical item has positive reasons", len(r1) > 0)
+
+    # Same name + category, different colour → penalised below potential
+    l2 = _mi('wallet', 'Accessories', 'black leather wallet', 'library')
+    f2 = _mi('wallet', 'Accessories', 'red leather wallet found', 'library', 'FOUND')
+    s2, r2, c2 = compute_match_score(l2, f2)
+    check("Same name diff colour has conflict", len(c2) > 0)
+    check("Same name diff colour score < same colour score", s2 < s1)
+    check("Same name diff colour score penalised below 60", s2 < 60)
+
+    # Different location reduces score
+    l3 = _mi('wallet', 'Accessories', 'black leather wallet', 'library')
+    f3 = _mi('wallet', 'Accessories', 'black leather wallet found', 'airport', 'FOUND')
+    s3, _, _ = compute_match_score(l3, f3)
+    check("Different location reduces score vs same location", s3 < s1)
+
+    # Completely unrelated items
+    l4 = _mi('umbrella', 'Other', 'red umbrella wooden handle', 'bus stop')
+    f4 = _mi('laptop',   'Electronics', 'dell laptop silver', 'park', 'FOUND')
+    s4, _, _ = compute_match_score(l4, f4)
+    check("Completely unrelated items score < 30", s4 < 30)
+    check("Completely unrelated items are hidden", match_category(s4) == 'hidden')
+
+    # Identical name alone does NOT guarantee strong match (location/desc differ)
+    l5 = _mi('phone', 'Electronics', 'samsung galaxy s21', 'bus stop')
+    f5 = _mi('phone', 'Electronics', 'apple iphone 13 pro', 'airport', 'FOUND')
+    s5, _, _ = compute_match_score(l5, f5)
+    check("Same name different desc/location not strong", s5 < 75)
+
+    # Missing description fields don't count as agreement
+    l6 = _mi('bag', 'Bags', '', 'canteen')
+    f6 = _mi('bag', 'Bags', '', 'canteen', 'FOUND')
+    s6, _, _ = compute_match_score(l6, f6)
+    check("Empty descriptions don't inflate score above name+cat+loc",
+          s6 <= (0.35 + 0.25 + 0.25) * 100 + 1)  # +1 tolerance
+
+# ---------------------------------------------------------------------------
+# Matches page UI tests (sections, filters, images)
+# ---------------------------------------------------------------------------
+print("\n--- Matches Page UI Tests ---")
+
+with app.test_client() as c:
+    c.post('/register', data={
+        'name': 'UITest User', 'email': 'uitest@test.com',
+        'phone': '3333333333', 'password': 'uitestpass',
+        'confirm_password': 'uitestpass'
+    })
+    c.post('/login', data={'email': 'uitest@test.com', 'password': 'uitestpass'})
+
+    # Report a strong-match pair
+    c.post('/report-lost', data={
+        'item_name': 'Silver Thermos', 'category': 'Other',
+        'description': 'silver metal thermos flask with blue lid',
+        'location': 'Canteen', 'date_lost_found': '2026-05-01',
+        'contact': 'uitest@test.com'
+    })
+    c.post('/report-found', data={
+        'item_name': 'Silver Thermos', 'category': 'Other',
+        'description': 'silver metal thermos flask with blue lid found',
+        'location': 'Canteen', 'date_lost_found': '2026-05-02',
+        'contact': 'uitest@test.com'
+    })
+
+    r = c.get('/matches')
+    check("Matches page loads (200)", r.status_code == 200)
+    check("Matches page shows Silver Thermos", b'Silver Thermos' in r.data)
+    check("Matches page shows Strong Candidate label", b'Strong' in r.data)
+    check("Matches page shows score circle", b'score-circle' in r.data or b'score-strong' in r.data)
+    check("Matches page shows filter form", b'filter_category' in r.data or b'name=\"category\"' in r.data or b'All Categories' in r.data)
+    check("Matches page shows Confirm Recovery button", b'Confirm Recovery' in r.data)
+    check("Matches page shows Reject button", b'Reject' in r.data)
+    check("Matches page shows Why it matches section", b'Why it matches' in r.data)
+
+    # Filter by category=strong
+    r = c.get('/matches?category=strong')
+    check("Filter strong shows Silver Thermos", b'Silver Thermos' in r.data)
+
+    # Filter by category=possible should not show strong match
+    r = c.get('/matches?category=possible')
+    check("Filter possible hides strong match", b'Silver Thermos' not in r.data)
+
+    # Filter by status=PENDING
+    r = c.get('/matches?status=PENDING')
+    check("Filter PENDING shows pending matches", r.status_code == 200)
+
+    # Filter by status=CONFIRMED shows empty (none confirmed yet)
+    r = c.get('/matches?status=CONFIRMED')
+    check("Filter CONFIRMED loads (200)", r.status_code == 200)
+
+    c.get('/logout')
+
+# ---------------------------------------------------------------------------
+# Possible match threshold (30-49) stored and displayed
+# ---------------------------------------------------------------------------
+print("\n--- Possible Match Threshold Tests ---")
+
+with app.app_context():
+    from services.matching import find_matches_for_item as _fmfi2, THRESHOLDS as _TH
+    from models.item import Item as _TI2
+    from datetime import date as _d2
+
+    # Create a pair that should score in the possible range (30-49)
+    # Same category only = 25 pts; add partial name overlap to get ~40
+    _lp = _TI2(
+        user_id=1, item_type='LOST', item_name='small bag',
+        category='Bags', description='canvas tote bag',
+        location='Station', date_lost_found=_d2(2026, 6, 1),
+        contact='x@x.com', status='ACTIVE'
+    )
+    _fp = _TI2(
+        user_id=1, item_type='FOUND', item_name='large bag',
+        category='Bags', description='leather satchel',
+        location='Airport', date_lost_found=_d2(2026, 6, 2),
+        contact='x@x.com', status='ACTIVE'
+    )
+    db.session.add_all([_lp, _fp])
+    db.session.commit()
+
+    from services.matching import compute_match_score as _cms
+    _sp, _, _ = _cms(_lp, _fp)
+    check("Possible-range pair scores in 30-74 range",
+          _TH['possible'] <= _sp < _TH['strong'])
+    check("Possible-range pair category is possible or potential",
+          match_category(_sp) in ('possible', 'potential'))
+
+    # find_matches_for_item with default threshold finds it
+    results_p = _fmfi2(_lp)
+    check("find_matches_for_item finds possible-range match",
+          any(other.id == _fp.id for other, score, _ in results_p))
+
+    from models.item import Match as _Mp
+    _Mp.query.filter(
+        (_Mp.lost_item_id == _lp.id) | (_Mp.found_item_id == _fp.id)
+    ).delete(synchronize_session=False)
+    db.session.delete(_lp)
+    db.session.delete(_fp)
+    db.session.commit()
+
+# ---------------------------------------------------------------------------
+# S3 image fallback on matches page
+# ---------------------------------------------------------------------------
+print("\n--- S3 Image Fallback on Matches Page ---")
+
+with app.app_context():
+    from routes.items import _build_image_url_map
+    from models.item import Item as _TI3
+
+    # Item with s3_object_key but S3 not configured → None
+    _is3 = _TI3()
+    _is3.id = 8001
+    _is3.s3_object_key = 'lost-items/missing.jpg'
+    _is3.image_filename = None
+    url_missing = _build_image_url_map([_is3])
+    check("Missing S3 object maps to None (no crash)", url_missing[8001] is None)
+
+    # Item with no image at all → None
+    _ino = _TI3()
+    _ino.id = 8002
+    _ino.s3_object_key = None
+    _ino.image_filename = None
+    url_none = _build_image_url_map([_ino])
+    check("No-image item maps to None", url_none[8002] is None)
+
+with app.test_client() as c:
+    c.post('/login', data={'email': 'uitest@test.com', 'password': 'uitestpass'})
+    r = c.get('/matches')
+    # Page must not 500 even when some items have no image
+    check("Matches page loads without 500 when images missing", r.status_code == 200)
+    # Fallback text shown for items without images
+    check("Matches page shows image fallback text",
+          b'No image' in r.data or b'Unavailable' in r.data or b'unavailable' in r.data)
+    c.get('/logout')
+
+# ---------------------------------------------------------------------------
+# Duplicate match prevention on repeated report
+# ---------------------------------------------------------------------------
+print("\n--- Duplicate Match on Repeated Report ---")
+
+with app.test_client() as c:
+    c.post('/login', data={'email': 'uitest@test.com', 'password': 'uitestpass'})
+
+    # Report the same lost item twice (simulates re-submission)
+    c.post('/report-lost', data={
+        'item_name': 'Duplicate Test Bag', 'category': 'Bags',
+        'description': 'brown leather bag with zipper',
+        'location': 'Library', 'date_lost_found': '2026-07-01',
+        'contact': 'uitest@test.com'
+    })
+    c.post('/report-found', data={
+        'item_name': 'Duplicate Test Bag', 'category': 'Bags',
+        'description': 'brown leather bag with zipper found',
+        'location': 'Library', 'date_lost_found': '2026-07-02',
+        'contact': 'uitest@test.com'
+    })
+
+    with app.app_context():
+        from models.item import Item as _Idd, Match as _Mdd
+        _ld2 = _Idd.query.filter_by(
+            item_name='Duplicate Test Bag', item_type='LOST'
+        ).order_by(_Idd.id.desc()).first()
+        _fd2 = _Idd.query.filter_by(
+            item_name='Duplicate Test Bag', item_type='FOUND'
+        ).order_by(_Idd.id.desc()).first()
+        if _ld2 and _fd2:
+            cnt_before = _Mdd.query.filter_by(
+                lost_item_id=_ld2.id, found_item_id=_fd2.id).count()
+            from services.matching import save_match as _sm2
+            _sm2(_ld2.id, _fd2.id, 80.0, ['dup test'])
+            _sm2(_ld2.id, _fd2.id, 80.0, ['dup test'])
+            cnt_after = _Mdd.query.filter_by(
+                lost_item_id=_ld2.id, found_item_id=_fd2.id).count()
+            check("Repeated save_match does not duplicate records",
+                  cnt_after == cnt_before)
+        else:
+            check("Duplicate test items found", False)
+
+    c.get('/logout')
+
+# ---------------------------------------------------------------------------
+# Recovered items excluded from future matching
+# ---------------------------------------------------------------------------
+print("\n--- Recovered Items Excluded from Matching ---")
+
+with app.app_context():
+    from services.matching import find_matches_for_item as _fmfi3
+    from models.item import Item as _TI4
+    from datetime import date as _d3
+
+    _lr = _TI4(
+        user_id=1, item_type='LOST', item_name='Recovered Wallet',
+        category='Accessories', description='black leather wallet',
+        location='Library', date_lost_found=_d3(2026, 8, 1),
+        contact='x@x.com', status='ACTIVE'
+    )
+    _fr = _TI4(
+        user_id=1, item_type='FOUND', item_name='Recovered Wallet',
+        category='Accessories', description='black leather wallet found',
+        location='Library', date_lost_found=_d3(2026, 8, 2),
+        contact='x@x.com', status='RECOVERED'  # already recovered
+    )
+    db.session.add_all([_lr, _fr])
+    db.session.commit()
+
+    results_r = _fmfi3(_lr)
+    check("RECOVERED found item excluded from matching candidates",
+          not any(other.id == _fr.id for other, _, _ in results_r))
+
+    from models.item import Match as _Mr
+    _Mr.query.filter(
+        (_Mr.lost_item_id == _lr.id) | (_Mr.found_item_id == _fr.id)
+    ).delete(synchronize_session=False)
+    db.session.delete(_lr)
+    db.session.delete(_fr)
+    db.session.commit()
+
+# ---------------------------------------------------------------------------
+# Matches page shows item descriptions and locations
+# ---------------------------------------------------------------------------
+print("\n--- Matches Page Content Tests ---")
+
+with app.test_client() as c:
+    c.post('/login', data={'email': 'uitest@test.com', 'password': 'uitestpass'})
+    r = c.get('/matches')
+    check("Matches page shows location info", b'Canteen' in r.data or b'Library' in r.data)
+    check("Matches page shows category info", b'Other' in r.data or b'Bags' in r.data)
+    check("Matches page shows date info", b'2026' in r.data)
+    check("Matches page shows LOST badge", b'LOST' in r.data)
+    check("Matches page shows FOUND badge", b'FOUND' in r.data)
+    c.get('/logout')
+
+# ---------------------------------------------------------------------------
+# Final summary (all tests)
+# ---------------------------------------------------------------------------
+print()
+print(f"Results: {len(PASS)} passed, {len(FAIL)} failed")
+if FAIL:
+    print("Failed tests:", FAIL)
+    sys.exit(1)
+else:
+    print("All tests passed!")

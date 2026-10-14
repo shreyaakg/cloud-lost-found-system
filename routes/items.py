@@ -283,7 +283,12 @@ def item_detail(item_id):
         db.session.rollback()
         matches = []
 
-    return render_template('items/detail.html', item=item, matches=matches, image_url=image_url)
+    return render_template('items/detail.html', item=item, matches=matches,
+                           image_url=image_url,
+                           match_image_urls=_build_image_url_map(
+                               [m.found_item if item.item_type == 'LOST' else m.lost_item
+                                for m in matches]
+                           ))
 
 
 # ---------------------------------------------------------------------------
@@ -522,14 +527,63 @@ def my_reports():
 @items_bp.route('/matches')
 @login_required
 def matches():
+    from services.matching import match_category, THRESHOLDS
+
+    filter_category = request.args.get('category', '').strip()   # strong/potential/possible
+    filter_status   = request.args.get('status',   '').strip()   # PENDING/CONFIRMED/REJECTED
+
     try:
-        all_matches = Match.query.order_by(Match.match_score.desc()).all()
+        q = Match.query
+        if filter_status:
+            q = q.filter_by(status=filter_status)
+        all_matches = q.order_by(Match.match_score.desc()).all()
     except Exception as exc:
         logger.error('DB error loading matches: %s', exc)
         db.session.rollback()
         flash('Could not load matches. Please try again.', 'danger')
         all_matches = []
-    return render_template('items/matches.html', matches=all_matches)
+
+    # Build image URL map for every item referenced by any match
+    item_ids = set()
+    for m in all_matches:
+        item_ids.add(m.lost_item_id)
+        item_ids.add(m.found_item_id)
+    try:
+        match_items = Item.query.filter(Item.id.in_(item_ids)).all() if item_ids else []
+    except Exception:
+        match_items = []
+    image_urls = _build_image_url_map(match_items)
+
+    # Annotate each match with its display category; apply category filter
+    # Pre-parse reasons and conflicts so templates don't need string logic
+    annotated = []
+    for m in all_matches:
+        cat = match_category(m.match_score)
+        if cat == 'hidden':
+            continue
+        if filter_category and cat != filter_category:
+            continue
+        raw = m.matching_reason.split('; ') if m.matching_reason else []
+        pos = [r for r in raw if not r.startswith('CONFLICT:')]
+        neg = [r[9:].strip() for r in raw if r.startswith('CONFLICT:')]
+        annotated.append((m, cat, pos, neg))
+
+    # Split into sections for the template
+    strong    = [(m, c, p, n) for m, c, p, n in annotated if c == 'strong']
+    potential = [(m, c, p, n) for m, c, p, n in annotated if c == 'potential']
+    possible  = [(m, c, p, n) for m, c, p, n in annotated if c == 'possible']
+
+    return render_template(
+        'items/matches.html',
+        matches=annotated,
+        strong=strong,
+        potential=potential,
+        possible=possible,
+        image_urls=image_urls,
+        filter_category=filter_category,
+        filter_status=filter_status,
+        thresholds=THRESHOLDS,
+    )
 
 
 # ---------------------------------------------------------------------------
